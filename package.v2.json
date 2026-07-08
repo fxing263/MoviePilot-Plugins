@@ -1,0 +1,15 @@
+{
+  "EmbyLibraryOrganizer": {
+    "name": "Emby媒体库整理",
+    "description": "巡检基于115 STRM方案建立的Emby媒体库，识别重复、生成整理计划，并在确认后安全清理本地与115文件。",
+    "labels": "媒体库,115,STRM,Emby,整理",
+    "version": "1.0.0",
+    "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Frontend/refs/heads/v2/src/assets/images/misc/emby.png",
+    "author": "zhaojg",
+    "level": 2,
+    "system_version": ">=2.12.0",
+    "history": {
+      "v1.0.0": "初始版本，支持媒体库扫描、STRM解析、重复识别、处理计划、批量审查、执行结果审查、本地清理、隔离区恢复、执行报告多格式审计、配置安全校验和115回收站删除保护。"
+    }
+  }
+}

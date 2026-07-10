@@ -1,5 +1,6 @@
 import csv
 import hashlib
+import hmac
 import json
 import re
 import shutil
@@ -68,6 +69,7 @@ KEEP_STRATEGIES = {
     "newest",
     "largest",
 }
+UNSAFE_TASK_ID_PATTERN = re.compile(r"[^A-Za-z0-9_-]+")
 
 
 class IssueLevel(str, Enum):
@@ -237,6 +239,7 @@ class PlanAction:
     action_type: ActionType
     path: str
     group_id: str = ""
+    prerequisite_action_id: Optional[str] = None
     cloud_file_id: Optional[str] = None
     cloud_pickcode: Optional[str] = None
     cloud_path: Optional[str] = None
@@ -717,7 +720,9 @@ class LibraryScanner:
 
     def _walk(self, root: Path) -> Iterable[Path]:
         """按最大深度遍历媒体库目录。"""
+        root_resolved = root.resolve()
         stack = [root]
+        visited_directories = {root_resolved}
         while stack:
             current = stack.pop()
             try:
@@ -726,12 +731,32 @@ class LibraryScanner:
                 logger.warning(f"【{PLUGIN_ID}】读取目录失败：{current} - {str(err)}")
                 continue
             for child in children:
-                if child.is_symlink() and not self.config.follow_symlinks:
+                try:
+                    if child.is_symlink():
+                        if not self.config.follow_symlinks:
+                            continue
+                        resolved_child = child.resolve(strict=True)
+                        try:
+                            resolved_child.relative_to(root_resolved)
+                        except ValueError:
+                            logger.warning(
+                                f"【{PLUGIN_ID}】符号链接目标超出媒体库，已跳过：{child}"
+                            )
+                            continue
+                    else:
+                        resolved_child = child.resolve()
+                except OSError as err:
+                    logger.warning(
+                        f"【{PLUGIN_ID}】解析媒体库路径失败：{child} - {str(err)}"
+                    )
                     continue
                 if self._depth(root, child) > self.config.max_depth:
                     continue
                 yield child
                 if child.is_dir():
+                    if resolved_child in visited_directories:
+                        continue
+                    visited_directories.add(resolved_child)
                     stack.append(child)
 
     @staticmethod
@@ -1249,10 +1274,14 @@ class PlanBuilder:
                 candidate_file = file_map.get(candidate_path)
                 if not candidate_file:
                     continue
+                local_action = None
                 if self.config.delete_duplicate_strm:
-                    actions.append(
-                        self._build_local_strm_action(task_id, group, candidate_file)
+                    local_action = self._build_local_strm_action(
+                        task_id,
+                        group,
+                        candidate_file,
                     )
+                    actions.append(local_action)
                 if self.config.delete_sidecar_files:
                     actions.extend(
                         self._build_sidecar_actions(task_id, group, candidate_file)
@@ -1264,13 +1293,18 @@ class PlanBuilder:
                             group,
                             candidate_file,
                             cloud_reference_counts,
+                            prerequisite_action_id=(
+                                local_action.action_id if local_action else None
+                            ),
                         )
                     )
                 if self.config.delete_empty_dirs:
                     actions.append(
                         self._build_empty_dir_action(task_id, group, candidate_file)
                     )
-        actions.extend(self._build_issue_actions(task_id, scan_result.issues))
+        actions.extend(
+            self._build_issue_actions(task_id, scan_result.issues, file_map)
+        )
         actions = self._limit_actions(
             self._apply_local_protection(self._deduplicate_actions(actions))
         )
@@ -1299,10 +1333,14 @@ class PlanBuilder:
             candidate_file = file_map.get(candidate_path)
             if not candidate_file:
                 continue
+            local_action = None
             if self.config.delete_duplicate_strm:
-                actions.append(
-                    self._build_local_strm_action(task_id, group, candidate_file)
+                local_action = self._build_local_strm_action(
+                    task_id,
+                    group,
+                    candidate_file,
                 )
+                actions.append(local_action)
             if self.config.delete_sidecar_files:
                 actions.extend(
                     self._build_sidecar_actions(task_id, group, candidate_file)
@@ -1314,6 +1352,9 @@ class PlanBuilder:
                         group,
                         candidate_file,
                         reference_counts,
+                        prerequisite_action_id=(
+                            local_action.action_id if local_action else None
+                        ),
                     )
                 )
             if self.config.delete_empty_dirs:
@@ -1395,16 +1436,26 @@ class PlanBuilder:
         self,
         task_id: str,
         issues: List[ScanIssue],
+        file_map: Dict[str, LibraryFile],
     ) -> List[PlanAction]:
         """根据巡检问题生成可选整理动作。"""
         actions = []
         for issue in issues:
+            source_file = file_map.get(issue.path)
+            source_size = source_file.size if source_file else None
+            source_modify_time = source_file.modify_time if source_file else None
+            source_sha1 = (
+                self._file_sha1(source_file.path) if source_file else None
+            )
             if issue.code == "trash_file" and self.config.clean_trash_files:
                 actions.append(
                     PlanAction(
                         action_id=self._action_id(task_id, "trash", issue.path),
                         action_type=ActionType.DELETE_SIDECAR,
                         path=issue.path,
+                        source_size=source_size,
+                        source_modify_time=source_modify_time,
+                        source_sha1=source_sha1,
                         allowed=True,
                         risk="low",
                         reason="常见临时或垃圾文件可清理",
@@ -1419,6 +1470,9 @@ class PlanBuilder:
                         action_id=self._action_id(task_id, "orphan-sidecar", issue.path),
                         action_type=ActionType.DELETE_SIDECAR,
                         path=issue.path,
+                        source_size=source_size,
+                        source_modify_time=source_modify_time,
+                        source_sha1=source_sha1,
                         allowed=True,
                         risk="medium",
                         reason="没有对应STRM的伴随文件可清理",
@@ -1443,15 +1497,22 @@ class PlanBuilder:
         group: DuplicateGroup,
         file: LibraryFile,
         reference_counts: Dict[str, int],
+        prerequisite_action_id: Optional[str],
     ) -> PlanAction:
         """生成115云端删除动作。"""
         identity = file.identity
-        skip_reason = self._cloud_delete_skip_reason(group, file, reference_counts)
+        skip_reason = self._cloud_delete_skip_reason(
+            group,
+            file,
+            reference_counts,
+            prerequisite_action_id,
+        )
         return PlanAction(
             action_id=self._action_id(task_id, "cloud", file.path.as_posix()),
             action_type=ActionType.DELETE_CLOUD_FILE,
             path=file.path.as_posix(),
             group_id=group.group_id,
+            prerequisite_action_id=prerequisite_action_id,
             cloud_file_id=identity.file_id if identity else None,
             cloud_pickcode=identity.pickcode if identity else None,
             cloud_path=identity.cloud_path if identity else None,
@@ -1483,11 +1544,14 @@ class PlanBuilder:
         group: DuplicateGroup,
         file: LibraryFile,
         reference_counts: Dict[str, int],
+        prerequisite_action_id: Optional[str],
     ) -> str:
         """返回云端删除保护原因。"""
         identity = file.identity
         if group.duplicate_type != DuplicateType.MEDIA:
             return "引用重复仍有保留STRM依赖同一115文件，禁止删除云端文件"
+        if not prerequisite_action_id:
+            return "未启用本地重复STRM清理，禁止删除云端文件"
         if not identity:
             return "无法解析115身份，禁止删除云端文件"
         if not identity.file_id:
@@ -1663,7 +1727,7 @@ class PlanExecutor:
     ) -> None:
         """初始化整理计划执行器。"""
         self.config = config
-        self.data_path = data_path
+        self.data_path = data_path.expanduser().resolve()
         self.cloud_delete_func = cloud_delete_func
         self.cloud_verify_func = cloud_verify_func
 
@@ -1690,7 +1754,10 @@ class PlanExecutor:
             ]
         elif (
             self._requires_cloud_confirm_token(plan)
-            and str(confirm_token or "") != str(expected_confirm_token or "")
+            and not self._cloud_confirm_token_matches(
+                confirm_token,
+                expected_confirm_token,
+            )
         ):
             results = [
                 ActionResult(
@@ -1705,8 +1772,21 @@ class PlanExecutor:
                 for action in plan.actions
             ]
         else:
+            snapshot_results = {
+                action.action_id: self._validate_action_source_snapshot(action)
+                for action in plan.actions
+                if action.allowed and not plan.dry_run
+            }
+            completed_results: Dict[str, ActionResult] = {}
             for action in plan.actions:
-                results.append(self._execute_action(plan, action))
+                result = self._execute_action(
+                    plan,
+                    action,
+                    snapshot_result=snapshot_results.get(action.action_id),
+                    completed_results=completed_results,
+                )
+                results.append(result)
+                completed_results[action.action_id] = result
         finished_at = datetime.now().isoformat(timespec="seconds")
         return ExecutionReport(
             task_id=plan.task_id,
@@ -1718,7 +1798,13 @@ class PlanExecutor:
             summary=self._build_execution_summary(results),
         )
 
-    def _execute_action(self, plan: OrganizerPlan, action: PlanAction) -> ActionResult:
+    def _execute_action(
+        self,
+        plan: OrganizerPlan,
+        action: PlanAction,
+        snapshot_result: Optional[ActionResult],
+        completed_results: Dict[str, ActionResult],
+    ) -> ActionResult:
         """执行单个整理动作。"""
         if not action.allowed:
             return ActionResult(
@@ -1736,10 +1822,36 @@ class PlanExecutor:
                 status=ActionStatus.DRY_RUN,
                 message="演练模式未执行实际删除",
             )
-        stale_result = self._validate_action_source_snapshot(action)
-        if stale_result:
-            return stale_result
+        if snapshot_result:
+            return snapshot_result
         if action.action_type == ActionType.DELETE_CLOUD_FILE:
+            if action.group_id:
+                prerequisite_action_id = action.prerequisite_action_id
+                prerequisite_result = completed_results.get(
+                    prerequisite_action_id or ""
+                )
+                if not prerequisite_action_id:
+                    return ActionResult(
+                        action_id=action.action_id,
+                        action_type=action.action_type,
+                        path=action.path,
+                        status=ActionStatus.SKIPPED,
+                        message="115删除动作缺少本地清理前置动作",
+                    )
+                if (
+                    not prerequisite_result
+                    or prerequisite_result.status != ActionStatus.DONE
+                    or prerequisite_result.action_type
+                    != ActionType.DELETE_LOCAL_STRM
+                    or prerequisite_result.path != action.path
+                ):
+                    return ActionResult(
+                        action_id=action.action_id,
+                        action_type=action.action_type,
+                        path=action.path,
+                        status=ActionStatus.SKIPPED,
+                        message="本地重复STRM未成功清理，跳过115删除",
+                    )
             return self._delete_cloud_file(action)
         if action.action_type == ActionType.DELETE_EMPTY_DIR:
             return self._delete_empty_dir(action)
@@ -1755,8 +1867,33 @@ class PlanExecutor:
             for action in plan.actions
         )
 
+    @staticmethod
+    def _cloud_confirm_token_matches(
+        confirm_token: Optional[str],
+        expected_confirm_token: Optional[str],
+    ) -> bool:
+        """判断115删除确认token是否完整且匹配。"""
+        if not confirm_token or not expected_confirm_token:
+            return False
+        return hmac.compare_digest(
+            str(confirm_token),
+            str(expected_confirm_token),
+        )
+
     def _validate_action_source_snapshot(self, action: PlanAction) -> Optional[ActionResult]:
         """校验动作源文件是否与计划生成时一致。"""
+        if action.action_type in {
+            ActionType.DELETE_LOCAL_STRM,
+            ActionType.DELETE_SIDECAR,
+            ActionType.DELETE_EMPTY_DIR,
+        } and not self._is_managed_local_path(Path(action.path)):
+            return ActionResult(
+                action_id=action.action_id,
+                action_type=action.action_type,
+                path=action.path,
+                status=ActionStatus.SKIPPED,
+                message="本地路径不在已配置的媒体库内",
+            )
         if action.action_type == ActionType.DELETE_EMPTY_DIR:
             return None
         if (
@@ -1816,6 +1953,14 @@ class PlanExecutor:
     def _delete_empty_dir(self, action: PlanAction) -> ActionResult:
         """删除空目录。"""
         path = Path(action.path)
+        if not self._is_managed_local_path(path):
+            return ActionResult(
+                action_id=action.action_id,
+                action_type=action.action_type,
+                path=action.path,
+                status=ActionStatus.SKIPPED,
+                message="本地路径不在已配置的媒体库内",
+            )
         if self._is_protected_local_path(path):
             return ActionResult(
                 action_id=action.action_id,
@@ -1861,6 +2006,14 @@ class PlanExecutor:
     def _delete_local_path(self, task_id: str, action: PlanAction) -> ActionResult:
         """删除或隔离本地路径。"""
         path = Path(action.path)
+        if not self._is_managed_local_path(path):
+            return ActionResult(
+                action_id=action.action_id,
+                action_type=action.action_type,
+                path=action.path,
+                status=ActionStatus.SKIPPED,
+                message="本地路径不在已配置的媒体库内",
+            )
         if self._is_protected_local_path(path):
             return ActionResult(
                 action_id=action.action_id,
@@ -2012,7 +2165,18 @@ class PlanExecutor:
                 message="115文件不存在，跳过回收站删除",
                 details={"cloud_snapshot": self._cloud_snapshot(action)},
             )
-        if file_item.fileid and str(file_item.fileid) != str(action.cloud_file_id):
+        if not file_item.fileid:
+            action.cloud_verify_status = CloudVerifyStatus.FAILED
+            snapshot = self._cloud_snapshot(action, file_item=file_item)
+            return ActionResult(
+                action_id=action.action_id,
+                action_type=action.action_type,
+                path=action.path,
+                status=ActionStatus.SKIPPED,
+                message="115文件校验结果缺少file_id，跳过回收站删除",
+                details={"cloud_snapshot": snapshot},
+            )
+        if str(file_item.fileid) != str(action.cloud_file_id):
             action.cloud_verify_status = CloudVerifyStatus.MISMATCHED
             snapshot = self._cloud_snapshot(action, file_item=file_item)
             return ActionResult(
@@ -2066,10 +2230,33 @@ class PlanExecutor:
                 continue
         return False
 
+    def _is_managed_local_path(self, path: Path) -> bool:
+        """判断本地路径是否位于已配置的媒体库内。"""
+        try:
+            resolved = path.expanduser().resolve()
+        except OSError:
+            return False
+        for library_path in self.config.library_paths:
+            try:
+                relative_path = resolved.relative_to(
+                    library_path.expanduser().resolve()
+                )
+                if relative_path.parts:
+                    return True
+            except (OSError, ValueError):
+                continue
+        return False
+
     def _quarantine_path(self, task_id: str, path: Path) -> Path:
         """计算本地隔离区路径。"""
-        safe_parts = [part for part in path.parts if part not in (path.anchor, "/")]
-        return self.data_path / "quarantine" / task_id / Path(*safe_parts)
+        resolved_path = path.expanduser().resolve()
+        safe_parts = [
+            part
+            for part in resolved_path.parts
+            if part not in (resolved_path.anchor, "/")
+        ]
+        safe_task_id = UNSAFE_TASK_ID_PATTERN.sub("_", task_id).strip("_") or "task"
+        return self.data_path / "quarantine" / safe_task_id / Path(*safe_parts)
 
     @staticmethod
     def _build_execution_summary(results: List[ActionResult]) -> Dict[str, Any]:
@@ -2088,8 +2275,8 @@ class QuarantineManager:
 
     def __init__(self, data_path: Path) -> None:
         """初始化隔离区管理器。"""
-        self.data_path = data_path
-        self.quarantine_path = data_path / "quarantine"
+        self.data_path = data_path.expanduser().resolve()
+        self.quarantine_path = self.data_path / "quarantine"
 
     def list_items(self) -> List[QuarantineItem]:
         """列出隔离区中的文件。"""
@@ -2122,20 +2309,30 @@ class QuarantineManager:
         if not backup_path.is_file():
             return False, "备份路径不是文件"
         target_path = self._restore_target_from_backup(backup_path)
-        if target_path.exists() and not overwrite:
+        target_exists = target_path.exists() or target_path.is_symlink()
+        if target_path.is_dir():
+            return False, "目标路径是目录，拒绝递归覆盖"
+        if target_exists and not overwrite:
             return False, "目标路径已存在，未覆盖"
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        if target_path.exists() and overwrite:
-            if target_path.is_dir():
-                shutil.rmtree(target_path)
-            else:
-                target_path.unlink()
+        if target_exists and overwrite:
+            target_path.unlink()
         shutil.move(backup_path.as_posix(), target_path.as_posix())
         self._cleanup_empty_parents(backup_path.parent)
         return True, target_path.as_posix()
 
     def restore_batch(self, batch_id: str, overwrite: bool = False) -> Dict[str, Any]:
         """按隔离批次恢复文件。"""
+        if (
+            not batch_id
+            or batch_id in {".", ".."}
+            or Path(batch_id).name != batch_id
+        ):
+            return {
+                "total": 0,
+                "restored": [],
+                "failed": [{"path": batch_id, "message": "隔离批次ID无效"}],
+            }
         batch_path = (self.quarantine_path / batch_id).expanduser().resolve()
         try:
             batch_path.relative_to(self.quarantine_path.expanduser().resolve())
@@ -2618,6 +2815,7 @@ class PlanSerializer:
             action_type=ActionType(data.get("action_type") or ActionType.DELETE_LOCAL_STRM.value),
             path=str(data.get("path") or ""),
             group_id=str(data.get("group_id") or ""),
+            prerequisite_action_id=data.get("prerequisite_action_id"),
             cloud_file_id=data.get("cloud_file_id"),
             cloud_pickcode=data.get("cloud_pickcode"),
             cloud_path=data.get("cloud_path"),

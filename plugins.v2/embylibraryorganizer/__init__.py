@@ -45,7 +45,7 @@ class EmbyLibraryOrganizer(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/MoviePilot-Frontend/"
         "refs/heads/v2/src/assets/images/misc/emby.png"
     )
-    plugin_version = "1.0.0"
+    plugin_version = "1.0.1"
     plugin_label = "媒体库整理"
     plugin_author = "zhaojg"
     plugin_config_prefix = "embylibraryorganizer_"
@@ -1280,7 +1280,12 @@ class EmbyLibraryOrganizer(_PluginBase):
             result["verify_status"] = action.cloud_verify_status.value
             result["message"] = "115文件不存在"
             return result
-        if file_item.fileid and str(file_item.fileid) != str(action.cloud_file_id):
+        if not file_item.fileid:
+            action.cloud_verify_status = CloudVerifyStatus.FAILED
+            result["verify_status"] = action.cloud_verify_status.value
+            result["message"] = "115文件校验结果缺少file_id"
+            return result
+        if str(file_item.fileid) != str(action.cloud_file_id):
             action.cloud_verify_status = CloudVerifyStatus.MISMATCHED
             result["verify_status"] = action.cloud_verify_status.value
             result["message"] = "115文件ID与计划不一致"

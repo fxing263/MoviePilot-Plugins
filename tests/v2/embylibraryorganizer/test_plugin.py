@@ -12,6 +12,7 @@ from embylibraryorganizer.core import (
     PlanAction,
     PlanExecutor,
     QuarantineManager,
+    StrmParser,
 )
 
 
@@ -44,14 +45,29 @@ def _build_cloud_plan(tmp_path: Path):
     return config, plan, cloud_action
 
 
-def test_api_paths_include_plugin_id() -> None:
-    """插件API路径应显式包含插件ID。"""
+def test_api_paths_are_relative_to_plugin_prefix() -> None:
+    """插件API路径应由MoviePilot统一拼接插件ID。"""
     plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
 
     paths = [item["path"] for item in plugin.get_api()]
 
-    assert "/EmbyLibraryOrganizer/scan" in paths
-    assert all(path.startswith("/EmbyLibraryOrganizer/") for path in paths)
+    assert "/scan" in paths
+    assert all(not path.startswith("/EmbyLibraryOrganizer/") for path in paths)
+
+
+def test_absolute_media_path_is_valid_strm_identity() -> None:
+    """绝对媒体路径应作为有效STRM身份参与去重。"""
+    media_path = (
+        "/CloudNAS/CloudDrive/115open/影视库/电影/示例 (2026)/示例 (2026).mkv"
+    )
+
+    identity = StrmParser().parse(media_path)
+
+    assert identity.is_absolute_path
+    assert not identity.is_url
+    assert identity.is_115
+    assert identity.cloud_path == media_path
+    assert identity.primary_key() == f"cloud_path:{media_path}"
 
 
 def test_cloud_delete_runs_after_local_prerequisite(tmp_path: Path) -> None:
@@ -266,3 +282,237 @@ def test_empty_directory_action_cannot_delete_library_root(tmp_path: Path) -> No
 
     assert library_root.exists()
     assert report.results[0].status == ActionStatus.SKIPPED
+
+
+def test_orphan_sidecars_follow_movie_and_season_scope(
+    tmp_path: Path,
+) -> None:
+    """孤儿检查应区分电影、季级文件、剧级文件和字幕。"""
+    movie_root = tmp_path / "movies"
+    movie_dir = movie_root / "Movie (2024)"
+    movie_dir.mkdir(parents=True)
+    movie_name = "Movie (2024) - 2160p"
+    (movie_dir / f"{movie_name}.strm").write_text(
+        "https://115.example.com/play?file_id=1001&path=/Movie.mkv",
+        encoding="utf-8",
+    )
+    movie_valid_files = [
+        movie_dir / f"{movie_name}.nfo",
+        movie_dir / f"{movie_name}-thumb.jpg",
+        movie_dir / f"{movie_name}-mediainfo.json",
+    ]
+    movie_orphan_files = [
+        movie_dir / "Removed Movie.nfo",
+        movie_dir / "Removed Movie-thumb.jpg",
+        movie_dir / "Removed Movie-mediainfo.json",
+    ]
+    movie_ignored_subtitle = movie_dir / "Removed Movie.zh-CN.srt"
+
+    tv_root = tmp_path / "tv"
+    show_dir = tv_root / "Show (2024)"
+    season_dir = show_dir / "Season 01"
+    season_dir.mkdir(parents=True)
+    episode_name = "Show - S01E01"
+    (season_dir / f"{episode_name}.strm").write_text(
+        "https://115.example.com/play?file_id=2001&path=/Show/S01E01.mkv",
+        encoding="utf-8",
+    )
+    episode_valid_files = [
+        season_dir / f"{episode_name}.nfo",
+        season_dir / f"{episode_name}-thumb.jpg",
+        season_dir / f"{episode_name}-mediainfo.json",
+        season_dir / "season.nfo",
+    ]
+    episode_orphan_files = [
+        season_dir / "Show - S01E02.nfo",
+        season_dir / "Show - S01E02-thumb.jpg",
+        season_dir / "Show - S01E02-mediainfo.json",
+    ]
+    ignored_files = [
+        movie_ignored_subtitle,
+        season_dir / "Show - S01E02.zh-CN.srt",
+        show_dir / "poster.jpg",
+        show_dir / "tvshow.nfo",
+        show_dir / "season01-poster.jpg",
+        show_dir / "Detached Episode.nfo",
+    ]
+    for path in (
+        movie_valid_files
+        + movie_orphan_files
+        + episode_valid_files
+        + episode_orphan_files
+        + ignored_files
+    ):
+        path.write_text("metadata", encoding="utf-8")
+
+    plan = EmbyLibraryOrganizerEngine(
+        OrganizerConfig(
+            library_paths=[movie_root, tv_root],
+            library_types={
+                movie_root.as_posix(): "movie",
+                tv_root.as_posix(): "tv",
+            },
+            delete_orphan_sidecar_files=True,
+            check_image_files=True,
+        )
+    ).create_plan()
+    orphan_issue_paths = {
+        issue.path for issue in plan.issues if issue.code == "orphan_sidecar"
+    }
+    orphan_action_paths = {
+        action.path
+        for action in plan.actions
+        if action.action_type == ActionType.DELETE_SIDECAR
+    }
+
+    expected_orphans = {
+        path.as_posix() for path in movie_orphan_files + episode_orphan_files
+    }
+    assert orphan_issue_paths == expected_orphans
+    assert orphan_action_paths == expected_orphans
+    assert all(path.as_posix() not in orphan_issue_paths for path in ignored_files)
+    assert all(issue.code != "missing_image" for issue in plan.issues)
+
+
+def test_duplicate_episode_cleanup_ignores_subtitles_and_shared_metadata(
+    tmp_path: Path,
+) -> None:
+    """重复集清理只应包含该 STRM 独占的非字幕伴随文件。"""
+    tv_root = tmp_path / "tv"
+    show_dir = tv_root / "Show (2024) {tmdb-1234}"
+    season_dir = show_dir / "Season 1"
+    season_dir.mkdir(parents=True)
+    lower_name = "Show.2024.S01E01.720p"
+    higher_name = "Show.2024.S01E01.2160p"
+    (season_dir / f"{lower_name}.strm").write_text(
+        "https://115.example.com/play?file_id=3001&path=/Show.720p.mkv",
+        encoding="utf-8",
+    )
+    (season_dir / f"{higher_name}.strm").write_text(
+        "https://115.example.com/play?file_id=3002&path=/Show.2160p.mkv",
+        encoding="utf-8",
+    )
+    owned_sidecars = [
+        season_dir / f"{lower_name}.nfo",
+        season_dir / f"{lower_name}-thumb.jpg",
+        season_dir / f"{lower_name}-mediainfo.json",
+    ]
+    ignored_files = [
+        season_dir / f"{lower_name}.zh-CN.srt",
+        season_dir / "season.nfo",
+        show_dir / "poster.jpg",
+        show_dir / "tvshow.nfo",
+    ]
+    for path in owned_sidecars + ignored_files:
+        path.write_text("metadata", encoding="utf-8")
+
+    plan = EmbyLibraryOrganizerEngine(
+        OrganizerConfig(
+            library_paths=[tv_root],
+            library_types={tv_root.as_posix(): "tv"},
+            delete_sidecar_files=True,
+        )
+    ).create_plan()
+    sidecar_action_paths = {
+        action.path
+        for action in plan.actions
+        if action.action_type == ActionType.DELETE_SIDECAR
+    }
+
+    assert sidecar_action_paths == {path.as_posix() for path in owned_sidecars}
+    assert all(path.as_posix() not in sidecar_action_paths for path in ignored_files)
+
+
+def test_tv_empty_directory_cleanup_only_targets_seasons(tmp_path: Path) -> None:
+    """电视剧空目录清理应忽略剧级目录，只处理季目录。"""
+    tv_root = tmp_path / "tv"
+    show_dir = tv_root / "Show (2024)"
+    season_dir = show_dir / "Season 1"
+    season_dir.mkdir(parents=True)
+
+    plan = EmbyLibraryOrganizerEngine(
+        OrganizerConfig(
+            library_paths=[tv_root],
+            library_types={tv_root.as_posix(): "tv"},
+            delete_empty_dirs=True,
+        )
+    ).create_plan()
+    empty_issue_paths = {
+        issue.path for issue in plan.issues if issue.code == "empty_directory"
+    }
+    empty_action_paths = {
+        action.path
+        for action in plan.actions
+        if action.action_type == ActionType.DELETE_EMPTY_DIR
+    }
+
+    assert empty_issue_paths == {season_dir.as_posix()}
+    assert empty_action_paths == {season_dir.as_posix()}
+
+
+def test_executor_rejects_stale_ignored_sidecar_actions(tmp_path: Path) -> None:
+    """执行器应拒绝旧计划中的字幕和剧级动作，并允许电影缩略图。"""
+    tv_root = tmp_path / "tv"
+    show_dir = tv_root / "Show (2024)"
+    season_dir = show_dir / "Season 1"
+    season_dir.mkdir(parents=True)
+    ignored_paths = [
+        season_dir / "Show.S01E01.zh-CN.srt",
+        show_dir / "tvshow.nfo",
+        show_dir / "poster.jpg",
+    ]
+    for path in ignored_paths:
+        path.write_text("metadata", encoding="utf-8")
+
+    movie_root = tmp_path / "movies"
+    movie_dir = movie_root / "Movie (2024)"
+    movie_dir.mkdir(parents=True)
+    movie_thumb = movie_dir / "Movie (2024)-thumb.jpg"
+    movie_thumb.write_text("thumb", encoding="utf-8")
+    actions = [
+        PlanAction(
+            action_id=f"ignored-{index}",
+            action_type=ActionType.DELETE_SIDECAR,
+            path=path.as_posix(),
+        )
+        for index, path in enumerate(ignored_paths, start=1)
+    ]
+    actions.append(
+        PlanAction(
+            action_id="movie-thumb",
+            action_type=ActionType.DELETE_SIDECAR,
+            path=movie_thumb.as_posix(),
+        )
+    )
+    plan = OrganizerPlan(
+        task_id="stale-plan",
+        created_at="now",
+        dry_run=False,
+        require_confirm=False,
+        issues=[],
+        duplicate_groups=[],
+        actions=actions,
+        summary={},
+    )
+    config = OrganizerConfig(
+        library_paths=[tv_root, movie_root],
+        library_types={
+            tv_root.as_posix(): "tv",
+            movie_root.as_posix(): "movie",
+        },
+        local_delete_mode="delete",
+    )
+
+    report = PlanExecutor(config, tmp_path / "data").execute(
+        plan,
+        confirmed=True,
+    )
+    results = {result.action_id: result for result in report.results}
+
+    assert all(path.exists() for path in ignored_paths)
+    assert all(
+        results[f"ignored-{index}"].status == ActionStatus.SKIPPED
+        for index in range(1, len(ignored_paths) + 1)
+    )
+    assert not movie_thumb.exists()
+    assert results["movie-thumb"].status == ActionStatus.DONE

@@ -1,6 +1,9 @@
 import hashlib
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 from apscheduler.triggers.cron import CronTrigger
 
@@ -18,7 +21,9 @@ from .core import (
     IssueLevel,
     LibraryFile,
     MediaKeyResolver,
+    OrganizerConfig,
     OrganizerPlan,
+    PlanAction,
     PlanBuilder,
     QuarantineManager,
     ReportExporter,
@@ -27,14 +32,29 @@ from .core import (
     StrmParser,
     config_from_dict,
     execution_report_to_dict,
+    owned_sidecar_paths,
     plan_from_dict,
     plan_to_dict,
     validate_config,
 )
 
 
+SECONDARY_CATEGORY_ROOT_TYPES = {
+    "电影": "movie",
+    "电视剧": "tv",
+    "剧集": "tv",
+    "动漫": "anime",
+}
+SXXEXX_EPISODE_PATTERN = re.compile(r"(?i)(S\d{1,2}E)(\d{1,3})")
+CHINESE_EPISODE_PATTERN = re.compile(r"第(\d{1,3})(集|话)")
+
+
 class EmbyLibraryOrganizer(_PluginBase):
     """Emby媒体库整理插件。"""
+
+    _MAX_VISIBLE_METADATA_FILES = 200
+    _OVERVIEW_SAMPLE_SIZE = 5
+    _DETAIL_PAGE_SIZE = 20
 
     plugin_name = "Emby媒体库整理"
     plugin_desc = (
@@ -45,7 +65,7 @@ class EmbyLibraryOrganizer(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/MoviePilot-Frontend/"
         "refs/heads/v2/src/assets/images/misc/emby.png"
     )
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     plugin_label = "媒体库整理"
     plugin_author = "zhaojg"
     plugin_config_prefix = "embylibraryorganizer_"
@@ -78,7 +98,7 @@ class EmbyLibraryOrganizer(_PluginBase):
         """返回插件 API 列表。"""
         return [
             {
-                "path": f"/{self.__class__.__name__}/scan",
+                "path": "/scan",
                 "endpoint": self.api_scan,
                 "methods": ["POST"],
                 "auth": "bear",
@@ -86,7 +106,55 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "扫描配置的Emby媒体库，返回重复识别结果和整理计划。",
             },
             {
-                "path": f"/{self.__class__.__name__}/validate",
+                "path": "/scan_orphan_metadata",
+                "endpoint": self.api_scan_orphan_metadata,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "扫描多余元数据文件",
+                "description": "仅检查电影目录和电视剧季目录中的多余元数据并生成清理计划。",
+            },
+            {
+                "path": "/scan_missing_metadata",
+                "endpoint": self.api_scan_missing_metadata,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "查询STRM缺失元数据",
+                "description": "仅查询所选二级分类中缺少NFO或MediaInfo的STRM。",
+            },
+            {
+                "path": "/categories",
+                "endpoint": self.api_get_categories,
+                "methods": ["GET"],
+                "auth": "bear",
+                "summary": "获取媒体库二级分类",
+                "description": "返回从已配置媒体库路径识别出的二级分类。",
+            },
+            {
+                "path": "/view",
+                "endpoint": self.api_set_page_view,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "切换插件详情视图",
+                "description": "在概览和缺失元数据完整结果之间切换并设置页码。",
+            },
+            {
+                "path": "/delete_missing_strm",
+                "endpoint": self.api_delete_missing_strm,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "清理缺失元数据的STRM",
+                "description": "清理指定STRM，并可选择联动清理其现有文件级元数据。",
+            },
+            {
+                "path": "/delete_episode_group",
+                "endpoint": self.api_delete_episode_group,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "清理同格式剧集STRM",
+                "description": "清理同一季目录中仅集号不同的STRM及其文件级元数据。",
+            },
+            {
+                "path": "/validate",
                 "endpoint": self.api_validate,
                 "methods": ["GET"],
                 "auth": "bear",
@@ -94,7 +162,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "校验媒体库路径、删除保护和删除数量等关键配置。",
             },
             {
-                "path": f"/{self.__class__.__name__}/plan",
+                "path": "/plan",
                 "endpoint": self.api_get_plan,
                 "methods": ["GET"],
                 "auth": "bear",
@@ -102,7 +170,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "返回最近一次扫描生成的整理计划。",
             },
             {
-                "path": f"/{self.__class__.__name__}/status",
+                "path": "/status",
                 "endpoint": self.api_status,
                 "methods": ["GET"],
                 "auth": "bear",
@@ -110,7 +178,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "返回当前扫描或执行状态。",
             },
             {
-                "path": f"/{self.__class__.__name__}/execute",
+                "path": "/execute",
                 "endpoint": self.api_execute,
                 "methods": ["POST"],
                 "auth": "bear",
@@ -118,7 +186,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "在确认后执行最近一次整理计划。",
             },
             {
-                "path": f"/{self.__class__.__name__}/confirm_token",
+                "path": "/confirm_token",
                 "endpoint": self.api_confirm_token,
                 "methods": ["GET"],
                 "auth": "bear",
@@ -126,7 +194,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "为最近整理计划生成115云端删除确认token。",
             },
             {
-                "path": f"/{self.__class__.__name__}/preflight",
+                "path": "/preflight",
                 "endpoint": self.api_preflight,
                 "methods": ["POST"],
                 "auth": "bear",
@@ -134,7 +202,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "只读校验最近计划中的115云端删除动作，不执行删除。",
             },
             {
-                "path": f"/{self.__class__.__name__}/actions",
+                "path": "/actions",
                 "endpoint": self.api_actions,
                 "methods": ["GET"],
                 "auth": "bear",
@@ -142,7 +210,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "按类型、风险和状态过滤最近整理计划中的动作。",
             },
             {
-                "path": f"/{self.__class__.__name__}/groups",
+                "path": "/groups",
                 "endpoint": self.api_groups,
                 "methods": ["GET"],
                 "auth": "bear",
@@ -150,7 +218,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "返回重复分组及其关联整理动作，供人工审查。",
             },
             {
-                "path": f"/{self.__class__.__name__}/group/keep",
+                "path": "/group/keep",
                 "endpoint": self.api_set_group_keep,
                 "methods": ["POST"],
                 "auth": "bear",
@@ -158,7 +226,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "按重复分组指定保留路径，并重新生成该组整理动作。",
             },
             {
-                "path": f"/{self.__class__.__name__}/issues",
+                "path": "/issues",
                 "endpoint": self.api_issues,
                 "methods": ["GET"],
                 "auth": "bear",
@@ -166,7 +234,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "按问题代码和级别过滤最近整理计划中的巡检问题。",
             },
             {
-                "path": f"/{self.__class__.__name__}/mediaserver_check",
+                "path": "/mediaserver_check",
                 "endpoint": self.api_mediaserver_check,
                 "methods": ["GET"],
                 "auth": "bear",
@@ -174,7 +242,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "使用MoviePilot本地媒体服务器缓存对照最近扫描计划。",
             },
             {
-                "path": f"/{self.__class__.__name__}/action",
+                "path": "/action",
                 "endpoint": self.api_update_action,
                 "methods": ["POST"],
                 "auth": "bear",
@@ -182,7 +250,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "根据 action_id 启用或禁用整理动作。",
             },
             {
-                "path": f"/{self.__class__.__name__}/actions/update",
+                "path": "/actions/update",
                 "endpoint": self.api_update_actions,
                 "methods": ["POST"],
                 "auth": "bear",
@@ -190,7 +258,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "按动作ID或筛选条件批量启用或禁用整理动作。",
             },
             {
-                "path": f"/{self.__class__.__name__}/quarantine",
+                "path": "/quarantine",
                 "endpoint": self.api_quarantine,
                 "methods": ["GET"],
                 "auth": "bear",
@@ -198,7 +266,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "列出本插件隔离区中的可恢复文件。",
             },
             {
-                "path": f"/{self.__class__.__name__}/restore",
+                "path": "/restore",
                 "endpoint": self.api_restore,
                 "methods": ["POST"],
                 "auth": "bear",
@@ -206,7 +274,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "将隔离区文件恢复到原始路径。",
             },
             {
-                "path": f"/{self.__class__.__name__}/restore_batch",
+                "path": "/restore_batch",
                 "endpoint": self.api_restore_batch,
                 "methods": ["POST"],
                 "auth": "bear",
@@ -214,7 +282,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "将同一执行批次的隔离文件恢复到原始路径。",
             },
             {
-                "path": f"/{self.__class__.__name__}/clean_quarantine",
+                "path": "/clean_quarantine",
                 "endpoint": self.api_clean_quarantine,
                 "methods": ["POST"],
                 "auth": "bear",
@@ -222,7 +290,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "按保留天数删除插件隔离区中的过期文件。",
             },
             {
-                "path": f"/{self.__class__.__name__}/history",
+                "path": "/history",
                 "endpoint": self.api_history,
                 "methods": ["GET"],
                 "auth": "bear",
@@ -230,7 +298,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "返回最近的扫描和执行历史。",
             },
             {
-                "path": f"/{self.__class__.__name__}/execution",
+                "path": "/execution",
                 "endpoint": self.api_execution,
                 "methods": ["GET"],
                 "auth": "bear",
@@ -238,7 +306,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "按状态、动作类型和云端快照过滤最近执行结果。",
             },
             {
-                "path": f"/{self.__class__.__name__}/clear_history",
+                "path": "/clear_history",
                 "endpoint": self.api_clear_history,
                 "methods": ["POST"],
                 "auth": "bear",
@@ -246,7 +314,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "清理扫描历史、执行历史和最近计划。",
             },
             {
-                "path": f"/{self.__class__.__name__}/clear_reports",
+                "path": "/clear_reports",
                 "endpoint": self.api_clear_reports,
                 "methods": ["POST"],
                 "auth": "bear",
@@ -254,7 +322,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "删除插件数据目录下的导出报告文件。",
             },
             {
-                "path": f"/{self.__class__.__name__}/export",
+                "path": "/export",
                 "endpoint": self.api_export,
                 "methods": ["POST"],
                 "auth": "bear",
@@ -262,7 +330,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "description": "导出最近一次整理计划，支持 json、csv、markdown。",
             },
             {
-                "path": f"/{self.__class__.__name__}/export_execution",
+                "path": "/export_execution",
                 "endpoint": self.api_export_execution,
                 "methods": ["POST"],
                 "auth": "bear",
@@ -277,17 +345,23 @@ class EmbyLibraryOrganizer(_PluginBase):
 
     def get_page(self) -> Optional[List[dict]]:
         """返回插件详情页面。"""
-        latest = plan_to_dict(self._latest_plan) if self._latest_plan else {}
+        page_state = self.get_data("page_state") or {}
+        if page_state.get("mode") == "missing_metadata":
+            return self._missing_metadata_detail_page(
+                int(page_state.get("page") or 1)
+            )
+        latest = self._latest_plan_data()
+        orphan_plan = self.get_data("latest_orphan_plan") or latest
+        missing_plan = self.get_data("latest_missing_plan") or latest
         summary = latest.get("summary") or {}
         latest_execution = self.get_data("latest_execution") or {}
-        quarantine_items = QuarantineManager(self.get_data_path()).list_items()
         return [
             {
                 "component": "VAlert",
                 "props": {
                     "type": "info",
                     "variant": "tonal",
-                    "text": "此页面展示最近一次扫描、执行和隔离区摘要。高风险动作执行前请先导出报告审查。",
+                    "text": "多余元数据扫描用于清理孤儿文件；缺失元数据查询按所选二级分类查找缺少NFO或MediaInfo的STRM。",
                 },
             },
             {
@@ -296,60 +370,42 @@ class EmbyLibraryOrganizer(_PluginBase):
                     {
                         "component": "tbody",
                         "content": [
+                            self._summary_row("扫描文件", summary.get("file_count", 0)),
                             self._summary_row("STRM数量", summary.get("strm_count", 0)),
-                            self._summary_row("问题数量", summary.get("issue_count", 0)),
-                            self._summary_row("重复分组", summary.get("duplicate_group_count", 0)),
-                            self._summary_row("待执行动作", summary.get("action_count", 0)),
-                            self._summary_row("115删除动作", summary.get("cloud_delete_count", 0)),
+                            self._summary_row(
+                                "多余元数据",
+                                (summary.get("issue_code_counts") or {}).get(
+                                    "orphan_sidecar",
+                                    0,
+                                ),
+                            ),
+                            self._summary_row("清理动作", summary.get("action_count", 0)),
+                            self._summary_row(
+                                "缺失元数据STRM",
+                                self._missing_metadata_strm_count(missing_plan),
+                            ),
                         ],
                     }
                 ],
             },
+            self._orphan_metadata_table(orphan_plan, latest_execution),
+            self._missing_metadata_table(missing_plan),
             {
-                "component": "VRow",
-                "props": {"class": "mt-4"},
-                "content": [
-                    self._page_panel(
-                        title="问题分布",
-                        rows=self._issue_distribution_rows(summary),
-                    ),
-                    self._page_panel(
-                        title="重复与动作",
-                        rows=[
-                            ("引用重复", summary.get("reference_duplicate_count", 0)),
-                            ("媒体重复", summary.get("media_duplicate_count", 0)),
-                            ("允许动作", summary.get("allowed_action_count", 0)),
-                            ("阻断动作", summary.get("blocked_action_count", 0)),
-                            ("高风险动作", summary.get("high_risk_action_count", 0)),
-                        ],
-                    ),
-                ],
-            },
-            {
-                "component": "VRow",
-                "props": {"class": "mt-4"},
-                "content": [
-                    self._page_panel(
-                        title="最近执行",
-                        rows=self._execution_summary_rows(latest_execution),
-                    ),
-                    self._page_panel(
-                        title="隔离区",
-                        rows=[
-                            ("文件数量", len(quarantine_items)),
-                            (
-                                "占用空间",
-                                self._format_size(
-                                    sum(item.size for item in quarantine_items)
-                                ),
-                            ),
-                            (
-                                "最近批次",
-                                self._latest_quarantine_batch(quarantine_items),
-                            ),
-                        ],
-                    ),
-                ],
+                "component": "VBtn",
+                "props": {
+                    "color": "info",
+                    "variant": "tonal",
+                    "block": True,
+                    "class": "mt-4",
+                    "prepend-icon": "mdi-format-list-bulleted",
+                },
+                "text": "查看全部缺失项",
+                "events": {
+                    "click": {
+                        "api": "plugin/EmbyLibraryOrganizer/view?mode=missing_metadata&page=1",
+                        "method": "post",
+                    },
+                },
             },
             {
                 "component": "VRow",
@@ -357,7 +413,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "content": [
                     {
                         "component": "VCol",
-                        "props": {"cols": 12, "md": 4},
+                        "props": {"cols": 12, "md": 3},
                         "content": [
                             {
                                 "component": "VBtn",
@@ -366,10 +422,10 @@ class EmbyLibraryOrganizer(_PluginBase):
                                     "block": True,
                                     "prepend-icon": "mdi-magnify-scan",
                                 },
-                                "text": "开始扫描",
+                                "text": "扫描多余元数据",
                                 "events": {
                                     "click": {
-                                        "api": "plugin/EmbyLibraryOrganizer/scan",
+                                        "api": "plugin/EmbyLibraryOrganizer/scan_orphan_metadata",
                                         "method": "post",
                                     },
                                 },
@@ -378,7 +434,28 @@ class EmbyLibraryOrganizer(_PluginBase):
                     },
                     {
                         "component": "VCol",
-                        "props": {"cols": 12, "md": 4},
+                        "props": {"cols": 12, "md": 3},
+                        "content": [
+                            {
+                                "component": "VBtn",
+                                "props": {
+                                    "color": "info",
+                                    "block": True,
+                                    "prepend-icon": "mdi-file-search-outline",
+                                },
+                                "text": "查询缺失元数据",
+                                "events": {
+                                    "click": {
+                                        "api": "plugin/EmbyLibraryOrganizer/scan_missing_metadata",
+                                        "method": "post",
+                                    },
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12, "md": 3},
                         "content": [
                             {
                                 "component": "VBtn",
@@ -399,7 +476,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                     },
                     {
                         "component": "VCol",
-                        "props": {"cols": 12, "md": 4},
+                        "props": {"cols": 12, "md": 3},
                         "content": [
                             {
                                 "component": "VBtn",
@@ -439,7 +516,7 @@ class EmbyLibraryOrganizer(_PluginBase):
         """返回插件仪表盘组件。"""
         if key != "summary":
             return None
-        latest = plan_to_dict(self._latest_plan) if self._latest_plan else {}
+        latest = self._latest_plan_data()
         summary = latest.get("summary") or {}
         return (
             {"cols": 12, "md": 6},
@@ -511,6 +588,121 @@ class EmbyLibraryOrganizer(_PluginBase):
         """扫描媒体库并生成整理计划。"""
         return self.scan_once()
 
+    def api_scan_orphan_metadata(self) -> Dict[str, Any]:
+        """仅扫描多余元数据并生成清理计划。"""
+        return self._scan_and_save(orphan_metadata_only=True)
+
+    def api_scan_missing_metadata(self) -> Dict[str, Any]:
+        """查询所选二级分类中缺失元数据的STRM。"""
+        return self._scan_and_save(missing_metadata_only=True)
+
+    def api_get_categories(self) -> Dict[str, Any]:
+        """返回自动识别的媒体库二级分类。"""
+        return {
+            "code": 0,
+            "msg": "",
+            "data": self._discover_secondary_categories(),
+        }
+
+    def api_set_page_view(
+        self,
+        mode: str = "overview",
+        page: int = 1,
+    ) -> Dict[str, Any]:
+        """切换详情页视图并保存当前页码。"""
+        if mode not in ("overview", "missing_metadata"):
+            mode = "overview"
+        page = max(int(page or 1), 1)
+        self.save_data("page_state", {"mode": mode, "page": page})
+        return {"code": 0, "msg": "", "data": {"mode": mode, "page": page}}
+
+    def api_delete_missing_strm(
+        self,
+        path: str,
+        include_sidecars: bool = False,
+    ) -> Dict[str, Any]:
+        """清理缺失元数据查询结果中的指定STRM及可选联动文件。"""
+        missing_plan = self.get_data("latest_missing_plan") or {}
+        candidate_paths = {
+            str(issue.get("path") or "")
+            for issue in missing_plan.get("issues") or []
+            if issue.get("code") in ("missing_nfo", "missing_mediainfo")
+        }
+        if path not in candidate_paths:
+            return {"code": 1, "msg": "该STRM不在当前缺失元数据查询结果中"}
+        strm_path = Path(path).expanduser()
+        if (
+            strm_path.is_symlink()
+            or not strm_path.is_file()
+            or strm_path.suffix.lower() != STRM_SUFFIX
+        ):
+            return {"code": 1, "msg": "STRM文件不存在或类型无效，请重新查询"}
+        organizer_config = config_from_dict(self._config)
+        resolved_path = strm_path.resolve()
+        if not any(
+            self._path_is_within(resolved_path, root.expanduser().resolve())
+            for root in organizer_config.library_paths
+        ):
+            return {"code": 1, "msg": "STRM路径不在已配置媒体库内"}
+        cleanup_paths = [resolved_path]
+        if include_sidecars:
+            cleanup_paths.extend(owned_sidecar_paths(resolved_path))
+        return self._execute_manual_cleanup(
+            cleanup_paths=cleanup_paths,
+            organizer_config=organizer_config,
+            strm_count=1,
+        )
+
+    def api_delete_episode_group(self, path: str) -> Dict[str, Any]:
+        """清理电视剧季目录中仅集号不同的同格式STRM及联动文件。"""
+        missing_plan = self.get_data("latest_missing_plan") or {}
+        candidate_paths = {
+            str(issue.get("path") or "")
+            for issue in missing_plan.get("issues") or []
+            if issue.get("code") in ("missing_nfo", "missing_mediainfo")
+        }
+        if path not in candidate_paths:
+            return {"code": 1, "msg": "该STRM不在当前缺失元数据查询结果中"}
+        strm_path = Path(path).expanduser()
+        if strm_path.is_symlink() or not strm_path.is_file():
+            return {"code": 1, "msg": "STRM文件不存在，请重新查询"}
+        resolved_path = strm_path.resolve()
+        if (
+            self._category_library_type(resolved_path) != "tv"
+            or not resolved_path.parent.name.casefold().startswith("season ")
+        ):
+            return {"code": 1, "msg": "同格式整组清理仅支持电视剧季目录"}
+        template = self._episode_name_template(resolved_path.stem)
+        if not template:
+            return {"code": 1, "msg": "文件名未识别到SxxExx或第X集格式"}
+        matched_strm_paths = sorted(
+            candidate.resolve()
+            for candidate in resolved_path.parent.iterdir()
+            if not candidate.is_symlink()
+            and candidate.is_file()
+            and candidate.suffix.lower() == STRM_SUFFIX
+            and self._episode_name_template(candidate.stem) == template
+        )
+        organizer_config = config_from_dict(self._config)
+        if len(matched_strm_paths) > organizer_config.max_delete_count:
+            return {
+                "code": 1,
+                "msg": (
+                    f"同格式匹配到{len(matched_strm_paths)}个STRM，超过单次最大删除数量"
+                    f"{organizer_config.max_delete_count}"
+                ),
+            }
+        cleanup_paths: List[Path] = []
+        for matched_path in matched_strm_paths:
+            cleanup_paths.append(matched_path)
+            cleanup_paths.extend(owned_sidecar_paths(matched_path))
+        cleanup_paths = list(dict.fromkeys(cleanup_paths))
+        return self._execute_manual_cleanup(
+            cleanup_paths=cleanup_paths,
+            organizer_config=organizer_config,
+            strm_count=len(matched_strm_paths),
+        )
+
     def api_validate(self) -> Dict[str, Any]:
         """校验插件配置。"""
         issues = [
@@ -525,10 +717,7 @@ class EmbyLibraryOrganizer(_PluginBase):
 
     def api_get_plan(self) -> Dict[str, Any]:
         """获取最近一次整理计划。"""
-        if self._latest_plan:
-            data = plan_to_dict(self._latest_plan)
-        else:
-            data = self.get_data("latest_plan") or {}
+        data = self._latest_plan_data()
         return {
             "code": 0,
             "msg": "",
@@ -1164,10 +1353,43 @@ class EmbyLibraryOrganizer(_PluginBase):
 
     def scan_once(self) -> Dict[str, Any]:
         """执行一次媒体库扫描并保存计划。"""
+        return self._scan_and_save(orphan_metadata_only=False)
+
+    def _scan_and_save(
+        self,
+        orphan_metadata_only: bool = False,
+        missing_metadata_only: bool = False,
+    ) -> Dict[str, Any]:
+        """按指定范围扫描媒体库并保存计划。"""
         self._task_status = "scanning"
         self._last_error = ""
         try:
             organizer_config = config_from_dict(self._config)
+            if missing_metadata_only:
+                category_paths, category_error = self._selected_category_paths()
+                if category_error:
+                    self._task_status = "failed"
+                    self._last_error = category_error
+                    logger.warning(f"【{self.plugin_name}】缺失元数据查询未启动：{category_error}")
+                    return {"code": 1, "msg": category_error}
+                organizer_config.library_paths = category_paths
+                organizer_config.library_types = {
+                    path.as_posix(): self._category_library_type(path)
+                    for path in category_paths
+                }
+                organizer_config.clean_trash_files = False
+                organizer_config.delete_duplicate_strm = False
+                organizer_config.delete_sidecar_files = False
+                organizer_config.delete_orphan_sidecar_files = False
+                organizer_config.delete_empty_dirs = False
+                organizer_config.sync_delete_115 = False
+            if orphan_metadata_only:
+                organizer_config.clean_trash_files = False
+                organizer_config.delete_duplicate_strm = False
+                organizer_config.delete_sidecar_files = False
+                organizer_config.delete_orphan_sidecar_files = True
+                organizer_config.delete_empty_dirs = False
+                organizer_config.sync_delete_115 = False
             validation_issues = validate_config(organizer_config)
             errors = [
                 issue
@@ -1177,15 +1399,28 @@ class EmbyLibraryOrganizer(_PluginBase):
             if errors:
                 self._task_status = "failed"
                 self._last_error = errors[0].message
+                logger.warning(
+                    f"【{self.plugin_name}】扫描未启动，配置校验失败："
+                    f"{errors[0].message}"
+                )
                 return {
                     "code": 1,
                     "msg": errors[0].message,
                     "data": [plan_to_dict(issue) for issue in validation_issues],
                 }
             engine = EmbyLibraryOrganizerEngine(organizer_config)
-            self._latest_plan = engine.create_plan()
+            if missing_metadata_only:
+                self._latest_plan = engine.create_missing_metadata_plan()
+            elif orphan_metadata_only:
+                self._latest_plan = engine.create_orphan_metadata_plan()
+            else:
+                self._latest_plan = engine.create_plan()
             data = plan_to_dict(self._latest_plan)
             self.save_data("latest_plan", data)
+            if missing_metadata_only:
+                self.save_data("latest_missing_plan", data)
+            elif orphan_metadata_only:
+                self.save_data("latest_orphan_plan", data)
             self._append_history("scan_history", data)
             self._task_status = "idle"
             return {
@@ -1199,6 +1434,183 @@ class EmbyLibraryOrganizer(_PluginBase):
             logger.error(f"【{self.plugin_name}】扫描失败：{str(err)}")
             return {"code": 1, "msg": f"扫描失败：{str(err)}"}
 
+    def _selected_category_paths(self) -> Tuple[List[Path], Optional[str]]:
+        """返回配置中选定且仍然有效的二级分类路径。"""
+        selected = self._config.get("missing_metadata_categories") or []
+        if isinstance(selected, str):
+            selected = [line.strip() for line in selected.splitlines() if line.strip()]
+        available = {
+            item["value"]: item
+            for item in self._discover_secondary_categories()
+        }
+        selected_paths = [
+            Path(value)
+            for value in selected
+            if str(value) in available
+        ]
+        if not selected_paths:
+            return [], "请先在插件配置中选择至少一个二级分类"
+        return selected_paths, None
+
+    def _discover_secondary_categories(self) -> List[Dict[str, str]]:
+        """从配置的媒体库根目录识别电影、电视剧和动漫二级分类。"""
+        organizer_config = config_from_dict(self._config)
+        categories: Dict[str, Dict[str, str]] = {}
+        for library_root in organizer_config.library_paths:
+            root = library_root.expanduser().resolve()
+            if not root.is_dir():
+                continue
+            library_type = organizer_config.library_types.get(root.as_posix(), "mixed")
+            if library_type in ("movie", "tv", "anime"):
+                category_parents = [(root, library_type, root.name)]
+            else:
+                category_parents = []
+                try:
+                    media_roots = sorted(
+                        (path for path in root.iterdir() if path.is_dir()),
+                        key=lambda path: path.name.casefold(),
+                    )
+                except OSError:
+                    continue
+                for media_root in media_roots:
+                    detected_type = SECONDARY_CATEGORY_ROOT_TYPES.get(media_root.name)
+                    if detected_type:
+                        category_parents.append(
+                            (media_root, detected_type, media_root.name)
+                        )
+            for category_parent, category_type, parent_label in category_parents:
+                try:
+                    category_paths = sorted(
+                        (path for path in category_parent.iterdir() if path.is_dir()),
+                        key=lambda path: path.name.casefold(),
+                    )
+                except OSError:
+                    continue
+                for category_path in category_paths:
+                    resolved_path = category_path.resolve()
+                    value = resolved_path.as_posix()
+                    categories[value] = {
+                        "title": f"{parent_label} / {category_path.name}",
+                        "value": value,
+                        "type": category_type,
+                    }
+        return sorted(categories.values(), key=lambda item: item["title"])
+
+    @staticmethod
+    def _category_library_type(path: Path) -> str:
+        """根据分类路径推断媒体库类型。"""
+        for part in reversed(path.parts):
+            library_type = SECONDARY_CATEGORY_ROOT_TYPES.get(part)
+            if library_type:
+                return library_type
+        return "mixed"
+
+    @staticmethod
+    def _path_is_within(path: Path, root: Path) -> bool:
+        """判断路径是否位于指定媒体库根目录内。"""
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _manual_delete_action(
+        task_id: str,
+        path: Path,
+        action_type: ActionType,
+    ) -> PlanAction:
+        """生成详情页手动清理动作并记录源文件快照。"""
+        stat = path.stat()
+        return PlanAction(
+            action_id=(
+                f"manual-{task_id}-"
+                f"{hashlib.sha256(path.as_posix().encode('utf-8')).hexdigest()[:16]}"
+            ),
+            action_type=action_type,
+            path=path.as_posix(),
+            source_size=stat.st_size,
+            source_modify_time=stat.st_mtime,
+            source_sha1=hashlib.sha1(path.read_bytes()).hexdigest(),
+            allowed=True,
+            risk="medium",
+            reason="用户在缺失元数据详情页手动选择清理",
+        )
+
+    def _execute_manual_cleanup(
+        self,
+        cleanup_paths: List[Path],
+        organizer_config: OrganizerConfig,
+        strm_count: int,
+    ) -> Dict[str, Any]:
+        """执行详情页手动清理并重新查询缺失元数据。"""
+        task_id = datetime.now().strftime("%Y%m%d%H%M%S")
+        actions = [
+            self._manual_delete_action(
+                task_id=task_id,
+                path=cleanup_path,
+                action_type=(
+                    ActionType.DELETE_LOCAL_STRM
+                    if cleanup_path.suffix.lower() == STRM_SUFFIX
+                    else ActionType.DELETE_SIDECAR
+                ),
+            )
+            for cleanup_path in cleanup_paths
+        ]
+        plan = OrganizerPlan(
+            task_id=task_id,
+            created_at=datetime.now().isoformat(timespec="seconds"),
+            dry_run=organizer_config.dry_run,
+            require_confirm=False,
+            issues=[],
+            duplicate_groups=[],
+            actions=actions,
+            summary={},
+        )
+        report = EmbyLibraryOrganizerEngine(organizer_config).execute_plan(
+            plan=plan,
+            data_path=self.get_data_path(),
+            confirmed=True,
+        )
+        execution_data = execution_report_to_dict(report)
+        self.save_data("latest_execution", execution_data)
+        self._append_history("execution_history", execution_data)
+        refresh_result = self._scan_and_save(missing_metadata_only=True)
+        if report.dry_run:
+            message = f"演练完成：匹配{strm_count}个STRM，未删除文件"
+        else:
+            message = f"清理完成：处理{strm_count}个STRM"
+        return {
+            "code": 0,
+            "msg": message,
+            "data": {
+                "strm_count": strm_count,
+                "execution": execution_data,
+                "refresh": refresh_result,
+            },
+        }
+
+    @staticmethod
+    def _episode_name_template(stem: str) -> Optional[Tuple[str, str]]:
+        """将单个剧集集号替换为占位符以比较同格式文件名。"""
+        sxxexx_matches = list(SXXEXX_EPISODE_PATTERN.finditer(stem))
+        if len(sxxexx_matches) == 1:
+            normalized = SXXEXX_EPISODE_PATTERN.sub(
+                lambda match: f"{match.group(1)}#",
+                stem,
+                count=1,
+            )
+            return "sxxexx", normalized.casefold()
+        chinese_matches = list(CHINESE_EPISODE_PATTERN.finditer(stem))
+        if len(chinese_matches) == 1:
+            normalized = CHINESE_EPISODE_PATTERN.sub(
+                lambda match: f"第#{match.group(2)}",
+                stem,
+                count=1,
+            )
+            return "chinese", normalized.casefold()
+        return None
+
     def _load_latest_plan(self) -> Optional[OrganizerPlan]:
         """从插件数据中恢复最近一次整理计划。"""
         data = self.get_data("latest_plan")
@@ -1209,6 +1621,19 @@ class EmbyLibraryOrganizer(_PluginBase):
         except Exception as err:
             logger.warning(f"【{self.plugin_name}】恢复整理计划失败：{str(err)}")
             return None
+
+    def _latest_plan_data(self) -> Dict[str, Any]:
+        """读取持久化的最新计划并同步当前插件实例。"""
+        data = self.get_data("latest_plan") or {}
+        if data:
+            try:
+                self._latest_plan = plan_from_dict(data)
+            except Exception as err:
+                logger.warning(f"【{self.plugin_name}】读取最新整理计划失败：{str(err)}")
+            return data
+        if self._latest_plan:
+            return plan_to_dict(self._latest_plan)
+        return {}
 
     def _append_history(self, key: str, item: Dict[str, Any]) -> None:
         """追加并裁剪插件历史记录。"""
@@ -1627,6 +2052,7 @@ class EmbyLibraryOrganizer(_PluginBase):
             "movie_library_paths": "",
             "tv_library_paths": "",
             "anime_library_paths": "",
+            "missing_metadata_categories": [],
             "library_types": {},
             "exclude_patterns": "",
             "protected_local_paths": "",
@@ -1749,6 +2175,559 @@ class EmbyLibraryOrganizer(_PluginBase):
             ("失败", summary.get("failed_count", 0)),
         ]
 
+    @classmethod
+    def _orphan_metadata_table(
+        cls,
+        plan: Dict[str, Any],
+        execution_report: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """生成多余元数据文件及执行状态表格。"""
+        issues = [
+            issue
+            for issue in plan.get("issues") or []
+            if issue.get("code") == "orphan_sidecar"
+        ]
+        actions = {
+            action.get("path"): action
+            for action in plan.get("actions") or []
+            if action.get("action_type") == ActionType.DELETE_SIDECAR.value
+        }
+        execution_matches = (
+            execution_report.get("task_id")
+            and execution_report.get("task_id") == plan.get("task_id")
+        )
+        results = {
+            result.get("path"): result
+            for result in execution_report.get("results") or []
+        } if execution_matches else {}
+        visible_issues = issues[: cls._OVERVIEW_SAMPLE_SIZE]
+        rows = [
+            cls._orphan_metadata_row(issue, actions, results)
+            for issue in visible_issues
+        ]
+        if not rows:
+            rows = [
+                {
+                    "component": "tr",
+                    "content": [
+                        {
+                            "component": "td",
+                            "props": {"colspan": 4},
+                            "text": "暂无多余元数据，请先执行扫描。",
+                        }
+                    ],
+                }
+            ]
+        title = f"多余元数据示例（共 {len(issues)} 条）"
+        return {
+            "component": "VCard",
+            "props": {"variant": "outlined", "class": "mt-4"},
+            "content": [
+                {
+                    "component": "VCardTitle",
+                    "props": {"class": "text-subtitle-1"},
+                    "text": title,
+                },
+                {
+                    "component": "VTable",
+                    "props": {"density": "compact"},
+                    "content": [
+                        {
+                            "component": "thead",
+                            "content": [
+                                {
+                                    "component": "tr",
+                                    "content": [
+                                        {"component": "th", "text": "类型"},
+                                        {"component": "th", "text": "原文件路径"},
+                                        {"component": "th", "text": "当前状态"},
+                                        {"component": "th", "text": "隔离位置"},
+                                    ],
+                                }
+                            ],
+                        },
+                        {"component": "tbody", "content": rows},
+                    ],
+                },
+            ],
+        }
+
+    @staticmethod
+    def _missing_metadata_strm_count(plan: Dict[str, Any]) -> int:
+        """统计缺少 NFO 或 MediaInfo 的 STRM 数量。"""
+        paths = {
+            str(issue.get("path") or "")
+            for issue in plan.get("issues") or []
+            if issue.get("code") in ("missing_nfo", "missing_mediainfo")
+        }
+        paths.discard("")
+        return len(paths)
+
+    @classmethod
+    def _missing_metadata_table(cls, plan: Dict[str, Any]) -> Dict[str, Any]:
+        """生成 STRM 缺失元数据查询结果表格。"""
+        missing_by_path: Dict[str, List[Dict[str, Any]]] = {}
+        for issue in plan.get("issues") or []:
+            if issue.get("code") not in ("missing_nfo", "missing_mediainfo"):
+                continue
+            path = str(issue.get("path") or "")
+            if path:
+                missing_by_path.setdefault(path, []).append(issue)
+        visible_items = list(sorted(missing_by_path.items()))[
+            : cls._OVERVIEW_SAMPLE_SIZE
+        ]
+        rows = [
+            cls._missing_metadata_row(path, issues)
+            for path, issues in visible_items
+        ]
+        if not rows:
+            rows = [
+                {
+                    "component": "tr",
+                    "content": [
+                        {
+                            "component": "td",
+                            "props": {"colspan": 3},
+                            "text": "暂无缺失元数据查询结果。",
+                        }
+                    ],
+                }
+            ]
+        title = f"缺失元数据示例（共 {len(missing_by_path)} 个STRM）"
+        return {
+            "component": "VCard",
+            "props": {"variant": "outlined", "class": "mt-4"},
+            "content": [
+                {
+                    "component": "VCardTitle",
+                    "props": {"class": "text-subtitle-1"},
+                    "text": title,
+                },
+                {
+                    "component": "VTable",
+                    "props": {"density": "compact"},
+                    "content": [
+                        {
+                            "component": "thead",
+                            "content": [
+                                {
+                                    "component": "tr",
+                                    "content": [
+                                        {"component": "th", "text": "分类"},
+                                        {"component": "th", "text": "文件"},
+                                        {"component": "th", "text": "缺失类型"},
+                                    ],
+                                }
+                            ],
+                        },
+                        {"component": "tbody", "content": rows},
+                    ],
+                },
+            ],
+        }
+
+    @classmethod
+    def _missing_metadata_row(
+        cls,
+        path: str,
+        issues: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """生成单个 STRM 缺失元数据展示行。"""
+        return {
+            "component": "tr",
+            "content": [
+                {"component": "td", "text": cls._category_label_from_path(path)},
+                {"component": "td", "text": Path(path).name},
+                {
+                    "component": "td",
+                    "text": "、".join(cls._missing_metadata_types(issues)),
+                },
+            ],
+        }
+
+    @staticmethod
+    def _missing_metadata_types(issues: List[Dict[str, Any]]) -> List[str]:
+        """返回缺失元数据的简短类型名称。"""
+        types = {
+            "NFO" if issue.get("code") == "missing_nfo" else "JSON"
+            for issue in issues
+            if issue.get("code") in ("missing_nfo", "missing_mediainfo")
+        }
+        return sorted(types)
+
+    @staticmethod
+    def _category_label_from_path(path: str) -> str:
+        """从媒体路径提取二级分类标签。"""
+        parts = Path(path).parts
+        for index, part in enumerate(parts[:-1]):
+            if part in SECONDARY_CATEGORY_ROOT_TYPES and len(parts) > index + 1:
+                return f"{part} / {parts[index + 1]}"
+        return Path(path).parent.name
+
+    def _missing_metadata_detail_page(self, page: int) -> List[Dict[str, Any]]:
+        """生成缺失元数据完整结果分页页面。"""
+        plan = self.get_data("latest_missing_plan") or self._latest_plan_data()
+        groups = self._build_missing_metadata_groups(plan)
+        page_count = max(
+            (len(groups) + self._DETAIL_PAGE_SIZE - 1) // self._DETAIL_PAGE_SIZE,
+            1,
+        )
+        current_page = min(max(page, 1), page_count)
+        start = (current_page - 1) * self._DETAIL_PAGE_SIZE
+        page_groups = groups[start : start + self._DETAIL_PAGE_SIZE]
+        content: List[Dict[str, Any]] = [
+            {
+                "component": "VBtn",
+                "props": {
+                    "variant": "text",
+                    "prepend-icon": "mdi-arrow-left",
+                },
+                "text": "返回概览",
+                "events": {
+                    "click": {
+                        "api": "plugin/EmbyLibraryOrganizer/view?mode=overview&page=1",
+                        "method": "post",
+                    },
+                },
+            },
+            {
+                "component": "div",
+                "props": {"class": "text-h6 mt-3"},
+                "text": "缺失元数据完整结果",
+            },
+            {
+                "component": "div",
+                "props": {"class": "text-body-2 text-medium-emphasis mb-3"},
+                "text": (
+                    f"共 {len(groups)} 个影视条目，第 {current_page}/{page_count} 页；"
+                    "点击条目可展开查看各季各集。"
+                ),
+            },
+            self._missing_metadata_pagination(current_page, page_count),
+        ]
+        if page_groups:
+            content.append(
+                {
+                    "component": "VExpansionPanels",
+                    "props": {"class": "mt-3"},
+                    "content": [
+                        self._missing_metadata_group_panel(group)
+                        for group in page_groups
+                    ],
+                }
+            )
+        else:
+            content.append(
+                {
+                    "component": "VAlert",
+                    "props": {
+                        "type": "info",
+                        "variant": "tonal",
+                        "class": "mt-3",
+                    },
+                    "text": "暂无查询结果，请返回概览后选择分类并执行查询。",
+                }
+            )
+        content.append(self._missing_metadata_pagination(current_page, page_count))
+        return content
+
+    @classmethod
+    def _build_missing_metadata_groups(
+        cls,
+        plan: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """按电影目录或电视剧剧名目录归组缺失元数据结果。"""
+        missing_by_path: Dict[str, List[Dict[str, Any]]] = {}
+        for issue in plan.get("issues") or []:
+            if issue.get("code") not in ("missing_nfo", "missing_mediainfo"):
+                continue
+            path = str(issue.get("path") or "")
+            if path:
+                missing_by_path.setdefault(path, []).append(issue)
+        groups: Dict[str, Dict[str, Any]] = {}
+        for path, issues in missing_by_path.items():
+            strm_path = Path(path)
+            if strm_path.parent.name.casefold().startswith("season "):
+                media_directory = strm_path.parent.parent
+            else:
+                media_directory = strm_path.parent
+            group_key = media_directory.as_posix()
+            group = groups.setdefault(
+                group_key,
+                {
+                    "title": media_directory.name,
+                    "category": cls._category_label_from_path(path),
+                    "items": [],
+                },
+            )
+            group["items"].append(
+                {
+                    "season": (
+                        strm_path.parent.name
+                        if strm_path.parent.name.casefold().startswith("season ")
+                        else "-"
+                    ),
+                    "name": strm_path.name,
+                    "path": path,
+                    "missing": cls._missing_metadata_types(issues),
+                }
+            )
+        for group in groups.values():
+            group["items"] = sorted(
+                group["items"],
+                key=lambda item: (item["season"], item["name"]),
+            )
+        return sorted(
+            groups.values(),
+            key=lambda group: (group["category"], group["title"]),
+        )
+
+    @staticmethod
+    def _missing_metadata_group_panel(group: Dict[str, Any]) -> Dict[str, Any]:
+        """生成单个影视条目的可展开缺失详情。"""
+        items = group.get("items") or []
+        rows = [
+            {
+                "component": "tr",
+                "content": [
+                    {"component": "td", "text": str(item.get("season") or "")},
+                    {"component": "td", "text": str(item.get("name") or "")},
+                    {
+                        "component": "td",
+                        "text": "、".join(item.get("missing") or []),
+                    },
+                    EmbyLibraryOrganizer._missing_metadata_action_cell(
+                        str(item.get("path") or "")
+                    ),
+                ],
+            }
+            for item in items
+        ]
+        return {
+            "component": "VExpansionPanel",
+            "content": [
+                {
+                    "component": "VExpansionPanelTitle",
+                    "text": (
+                        f"{group.get('category') or ''} · {group.get('title') or ''} "
+                        f"· {len(items)} 个STRM"
+                    ),
+                },
+                {
+                    "component": "VExpansionPanelText",
+                    "content": [
+                        {
+                            "component": "VTable",
+                            "props": {"density": "compact"},
+                            "content": [
+                                {
+                                    "component": "thead",
+                                    "content": [
+                                        {
+                                            "component": "tr",
+                                            "content": [
+                                                {"component": "th", "text": "季"},
+                                                {"component": "th", "text": "文件"},
+                                                {"component": "th", "text": "缺失类型"},
+                                                {"component": "th", "text": "操作"},
+                                            ],
+                                        }
+                                    ],
+                                },
+                                {"component": "tbody", "content": rows},
+                            ],
+                        }
+                    ],
+                },
+            ],
+        }
+
+    @staticmethod
+    def _missing_metadata_action_cell(path: str) -> Dict[str, Any]:
+        """生成单个STRM的清理操作按钮。"""
+        encoded_path = quote(path, safe="")
+        buttons = [
+            {
+                "component": "VBtn",
+                "props": {
+                    "color": "warning",
+                    "variant": "outlined",
+                    "size": "small",
+                    "class": "me-2",
+                    "prepend-icon": "mdi-delete-outline",
+                },
+                "text": "删除STRM",
+                "events": {
+                    "click": {
+                        "api": (
+                            "plugin/EmbyLibraryOrganizer/delete_missing_strm?"
+                            f"path={encoded_path}&include_sidecars=false"
+                        ),
+                        "method": "post",
+                    },
+                },
+            },
+            {
+                "component": "VBtn",
+                "props": {
+                    "color": "error",
+                    "size": "small",
+                    "class": "me-2",
+                    "prepend-icon": "mdi-delete-sweep-outline",
+                },
+                "text": "STRM+联动",
+                "events": {
+                    "click": {
+                        "api": (
+                            "plugin/EmbyLibraryOrganizer/delete_missing_strm?"
+                            f"path={encoded_path}&include_sidecars=true"
+                        ),
+                        "method": "post",
+                    },
+                },
+            },
+        ]
+        strm_path = Path(path)
+        if (
+            EmbyLibraryOrganizer._category_library_type(strm_path) == "tv"
+            and strm_path.parent.name.casefold().startswith("season ")
+            and EmbyLibraryOrganizer._episode_name_template(strm_path.stem)
+        ):
+            buttons.append(
+                {
+                    "component": "VBtn",
+                    "props": {
+                        "color": "error",
+                        "variant": "tonal",
+                        "size": "small",
+                        "prepend-icon": "mdi-delete-alert-outline",
+                    },
+                    "text": "同格式整组",
+                    "events": {
+                        "click": {
+                            "api": (
+                                "plugin/EmbyLibraryOrganizer/delete_episode_group?"
+                                f"path={encoded_path}"
+                            ),
+                            "method": "post",
+                        },
+                    },
+                }
+            )
+        return {
+            "component": "td",
+            "props": {"style": "min-width: 390px;"},
+            "content": buttons,
+        }
+
+    @staticmethod
+    def _missing_metadata_pagination(page: int, page_count: int) -> Dict[str, Any]:
+        """生成缺失元数据详情分页按钮。"""
+        return {
+            "component": "VRow",
+            "props": {"class": "my-2", "justify": "space-between"},
+            "content": [
+                {
+                    "component": "VCol",
+                    "props": {"cols": 6},
+                    "content": [
+                        {
+                            "component": "VBtn",
+                            "props": {
+                                "variant": "outlined",
+                                "block": True,
+                                "disabled": page <= 1,
+                                "prepend-icon": "mdi-chevron-left",
+                            },
+                            "text": "上一页",
+                            "events": {
+                                "click": {
+                                    "api": (
+                                        "plugin/EmbyLibraryOrganizer/view?"
+                                        f"mode=missing_metadata&page={max(page - 1, 1)}"
+                                    ),
+                                    "method": "post",
+                                },
+                            },
+                        }
+                    ],
+                },
+                {
+                    "component": "VCol",
+                    "props": {"cols": 6},
+                    "content": [
+                        {
+                            "component": "VBtn",
+                            "props": {
+                                "variant": "outlined",
+                                "block": True,
+                                "disabled": page >= page_count,
+                                "append-icon": "mdi-chevron-right",
+                            },
+                            "text": "下一页",
+                            "events": {
+                                "click": {
+                                    "api": (
+                                        "plugin/EmbyLibraryOrganizer/view?"
+                                        f"mode=missing_metadata&page={min(page + 1, page_count)}"
+                                    ),
+                                    "method": "post",
+                                },
+                            },
+                        }
+                    ],
+                },
+            ],
+        }
+
+    @classmethod
+    def _orphan_metadata_row(
+        cls,
+        issue: Dict[str, Any],
+        actions: Dict[str, Dict[str, Any]],
+        results: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """生成单个多余元数据文件展示行。"""
+        path = str(issue.get("path") or "")
+        action = actions.get(path) or {}
+        result = results.get(path) or {}
+        if result:
+            status = str(result.get("message") or result.get("status") or "已执行")
+        elif action and not action.get("allowed", True):
+            status = str(action.get("skip_reason") or "已被保护规则阻止")
+        elif action:
+            status = "待执行"
+        else:
+            status = "未生成清理动作"
+        cell_props = {
+            "style": "white-space: normal; overflow-wrap: anywhere; min-width: 120px;"
+        }
+        return {
+            "component": "tr",
+            "content": [
+                {"component": "td", "text": cls._metadata_file_type(path)},
+                {"component": "td", "props": cell_props, "text": path},
+                {"component": "td", "props": cell_props, "text": status},
+                {
+                    "component": "td",
+                    "props": cell_props,
+                    "text": str(result.get("backup_path") or ""),
+                },
+            ],
+        }
+
+    @staticmethod
+    def _metadata_file_type(path: str) -> str:
+        """根据文件名返回元数据类型。"""
+        name = Path(path).name.casefold()
+        if name.endswith("-mediainfo.json"):
+            return "MediaInfo"
+        if "-thumb." in name:
+            return "缩略图"
+        if name.endswith(".nfo"):
+            return "NFO"
+        return "元数据"
+
     @staticmethod
     def _latest_quarantine_batch(items: List[Any]) -> str:
         """返回隔离区最近批次。"""
@@ -1825,8 +2804,7 @@ class EmbyLibraryOrganizer(_PluginBase):
             ],
         }
 
-    @staticmethod
-    def _form_schema() -> List[dict]:
+    def _form_schema(self) -> List[dict]:
         """返回 Vuetify 配置表单。"""
         return [
             {
@@ -1885,7 +2863,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                                         "props": {
                                             "model": "delete_sidecar_files",
                                             "label": "重复伴随文件清理动作",
-                                            "hint": "仅处理重复STRM候选旁边的伴随文件",
+                                            "hint": "仅处理候选STRM独占的NFO、缩略图和MediaInfo",
                                             "persistent-hint": True,
                                         },
                                     }
@@ -1900,7 +2878,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                                         "props": {
                                             "model": "delete_orphan_sidecar_files",
                                             "label": "孤儿伴随文件清理动作",
-                                            "hint": "仅处理没有对应STRM的NFO、图片和字幕",
+                                            "hint": "电影检查NFO、缩略图和MediaInfo，电视剧仅检查季目录集级文件",
                                             "persistent-hint": True,
                                         },
                                     }
@@ -2005,61 +2983,18 @@ class EmbyLibraryOrganizer(_PluginBase):
                         },
                     },
                     {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "delete_duplicate_strm",
-                                            "label": "生成重复STRM清理动作",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "clean_trash_files",
-                                            "label": "生成垃圾文件清理动作",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "check_nfo_files",
-                                            "label": "检查NFO缺失",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "check_image_files",
-                                            "label": "检查图片缺失",
-                                        },
-                                    }
-                                ],
-                            },
-                        ],
+                        "component": "VSelect",
+                        "props": {
+                            "model": "missing_metadata_categories",
+                            "label": "缺失元数据查询分类",
+                            "items": self._discover_secondary_categories(),
+                            "multiple": True,
+                            "chips": True,
+                            "closable-chips": True,
+                            "class": "mt-6 mb-4",
+                            "hint": "自动识别电影、电视剧和动漫目录下的二级分类，可多选",
+                            "persistent-hint": True,
+                        },
                     },
                     {
                         "component": "VTextarea",

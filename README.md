@@ -1,176 +1,189 @@
-# MoviePilot-Plugins
+# Emby 媒体库整理
 
-MoviePilot 官方插件仓库，也是 MoviePilot 插件市场默认读取的插件索引与源码仓库：
-<https://github.com/jxxghp/MoviePilot-Plugins>
+`EmbyLibraryOrganizer` 是一个面向 MoviePilot v2 的 Emby 媒体库巡检与整理插件，主要用于维护基于 115 STRM 方案建立的媒体库。
 
-这个仓库本身并不是独立运行时，插件真正的运行宿主在后端仓库 `MoviePilot`，插件 UI 的渲染宿主在前端仓库 `MoviePilot-Frontend`。因此，开发插件时需要同时理解这三个仓库的分工。
+插件会扫描本地媒体库目录，识别无效 STRM、重复引用、疑似重复媒体、命名问题、孤儿伴随文件、垃圾文件和空目录，并生成可审查、可导出、可恢复的整理计划。默认使用演练模式，不会直接修改本地或云端文件。
 
-## 文档导航
+## 适用场景
 
-- [仓库指南](./docs/Repository_Guide.md)：先看这份，了解本仓库的目录、元数据、发布链路，以及和主仓库/前端仓库的边界。
-- [V2 插件开发指南](./docs/V2_Plugin_Development.md)：开发或迁移 V2 插件时的主文档，覆盖生命周期、渲染模式、接口能力和校验建议。
-- [MoviePilot 前端模块联邦开发指南](https://github.com/jxxghp/MoviePilot-Frontend/blob/v2/docs/module-federation-guide.md)：当插件需要使用 Vue 远程组件时必读。
-- [常见问题索引](./docs/FAQ.md)：FAQ 已拆分为独立文档，适合按场景查阅。
+- Emby 通过本地 `.strm` 文件播放 115 网盘媒体。
+- 同一媒体存在多个清晰度、版本或重复 STRM，需要人工选择保留项。
+- 多个 STRM 意外指向同一个 115 文件，需要清理重复入口。
+- 媒体库中长期积累了孤儿 NFO、缩略图、MediaInfo、临时文件或空目录。
+- 希望在实际删除前获得清晰的风险分级、处理计划和执行报告。
 
-## 仓库定位
+## 核心能力
 
-- `MoviePilot` 负责插件加载、事件分发、API 注册、公共服务、数据持久化和权限控制。
-- `MoviePilot-Frontend` 负责插件市场、插件配置/详情弹窗、仪表板渲染，以及 Vue 联邦远程组件的加载。
-- `MoviePilot-Plugins` 负责插件源码、插件市场索引、插件图标与插件开发文档。
+### 扫描与识别
 
-如果你要判断某个问题该在哪个仓库处理，可以按下面这条经验规则：
+- 支持混合、电影、剧集和动漫媒体库，可同时配置多个根目录。
+- 支持 URL 与绝对媒体路径形式的 STRM，解析 `file_id`、`pickcode`、云端路径及自定义身份字段。
+- 从路径中提取 TMDB、IMDb、TVDB 标识，优先用于媒体归组与去重。
+- 支持 `SxxExx`、`Season 01/Episode 01`、动漫简单集号等常见剧集结构。
+- 检查电影年份、剧集编号、年份冲突、缺失 NFO 和缺失图片等问题。
+- 孤儿伴随文件按同目录 STRM 归属判断；电影检查 NFO、缩略图和 MediaInfo，电视剧仅检查季目录中的集级 NFO、缩略图和 MediaInfo，剧级文件与字幕不参与处理。
+- 可使用 MoviePilot 已同步的媒体服务器缓存核对媒体是否已入库，不直接请求 Emby 外部接口。
 
-- 插件类、事件、链式扩展、服务、API、数据保存问题，先看 `MoviePilot`。
-- 插件页面渲染、模块联邦、侧栏全页入口、前端交互问题，先看 `MoviePilot-Frontend`。
-- 插件元数据、版本号、图标、插件市场展示、Release 打包问题，先看本仓库。
+### 重复分析与计划审查
+
+- 区分“多个 STRM 指向同一文件”的引用重复和“不同文件对应同一媒体”的媒体重复。
+- 支持质量与命名、优先路径、最新修改时间、文件体积四种保留策略。
+- 为每个重复组记录评分明细、推荐保留项、候选清理项和风险等级。
+- 可按动作、风险、重复组、问题代码和问题级别筛选或导出结果。
+- 支持人工修改重复组保留项，并自动重建相关整理动作。
+
+### 执行、审计与恢复
+
+- 本地文件默认移动到插件隔离区，也可选择直接删除模式。
+- 可选通过 MoviePilot 的 `115网盘Plus` 存储能力将重复云端文件移入回收站。
+- 提供云端删除预检、计划专属确认 token、源文件快照和执行结果快照。
+- 支持隔离文件单项恢复、按执行批次恢复和过期隔离文件清理。
+- 支持 JSON、CSV、Markdown 计划及执行报告导出。
+- 扫描、重复分析、计划生成和逐项执行均输出带插件前缀的进度日志。
+- 详情页直接列出多余元数据的类型、原路径、处理状态及隔离位置，最多展示 200 条。
+- 自动识别电影、电视剧和动漫目录下的二级分类，可多选分类查询缺少同名 NFO 或 `-mediainfo.json` 的 STRM。
+- 详情概览只展示少量结果示例，可进入完整结果页按影视条目分页，并展开电视剧查看各季各集缺失项。
+- 缺失详情只显示 NFO/JSON 类型，可逐个清理 STRM，或联动清理其现有同名 NFO、缩略图和 MediaInfo。
+- 电视剧季目录支持按 `SxxExx` 或 `第X集/话` 识别同格式文件，一次清理仅集号不同的整组 STRM 及联动元数据。
+- 提供插件详情页、首页仪表盘摘要、定时扫描和执行完成通知。
+
+## 安全机制
+
+插件将删除操作设计为失败即停止：
+
+- 默认开启 `dry_run`，首次扫描只生成计划。
+- 引用重复不会删除云端文件，因为保留 STRM 仍依赖同一 115 文件。
+- 云端删除必须具备 `file_id` 和云端路径，并通过实时存在性与 ID 一致性校验。
+- 云端删除仅在对应本地重复 STRM 已成功隔离或删除后执行。
+- 本地动作被禁用、失败或计划快照过期时，关联云端动作自动跳过。
+- 真实云端删除必须提交本次计划的确认 token；缺失或不匹配时不会执行。
+- 本地动作只能处理已配置媒体库内部路径，越界符号链接不会进入扫描结果。
+- 保护路径、单次最大处理数量和动作风险会在计划阶段提前标记。
+- 隔离恢复不会递归覆盖同名目录，也不会接受隔离区外的备份路径。
+- 空目录动作只删除执行时仍为空的目录，且不会删除媒体库根目录。
+
+即使已经完成演练，也建议先导出计划并确认保留项、保护路径和云端文件身份，再执行真实清理。
+
+## 环境要求
+
+- MoviePilot `>= 2.12.0`
+- 已挂载到 MoviePilot 容器或主机的 Emby STRM 媒体库目录
+- 如需同步清理 115 文件，MoviePilot 中需配置并启用 `115网盘Plus`
+
+插件不直接连接 Emby 或 115 HTTP API，媒体服务器核对使用 MoviePilot 本地缓存，云端操作通过 MoviePilot 已有存储链完成。
+
+## 安装
+
+### 插件市场
+
+将以下仓库地址追加到 MoviePilot 的 `PLUGIN_MARKET` 配置，多个仓库使用英文逗号分隔：
+
+```text
+https://github.com/fxing263/MoviePilot-Plugins
+```
+
+刷新插件市场后，搜索并安装“Emby媒体库整理”。
+
+### 本地仓库
+
+克隆本仓库后，也可以将仓库根目录加入 `PLUGIN_LOCAL_REPO_PATHS`：
+
+```text
+/path/to/MoviePilot-Plugins
+```
+
+本地仓库必须保留 `package.v2.json` 与 `plugins.v2/embylibraryorganizer/` 的目录结构。
+
+## 推荐使用流程
+
+1. 配置电影媒体库路径和剧集媒体库路径。
+2. 点击“扫描多余元数据”，查看候选文件和清理动作数量。
+3. 保持 `dry_run` 开启进行首次演练，点击“确认执行”检查结果。
+4. 确认候选正确后关闭演练模式，再次扫描并确认执行。
+5. 默认删除方式为移入插件隔离区，可在执行后恢复。
+
+“扫描多余元数据”只处理电影目录和电视剧季目录中没有同名 STRM 的 NFO、`-thumb` 图片和 `-mediainfo.json`；不会检查或删除字幕、电视剧剧级元数据、重复 STRM、空目录和 115 文件。
+
+“查询缺失元数据”需要先在插件配置中选择一个或多个自动识别的二级分类。查询只生成缺失列表，不生成删除动作；电视剧仅检查季目录中的 STRM。
+
+## 关键配置
+
+| 配置项 | 说明 | 建议 |
+| --- | --- | --- |
+| `library_paths` | 混合媒体库路径 | 至少配置一项 |
+| `movie_library_paths` | 电影媒体库路径 | 独立分库时配置 |
+| `tv_library_paths` | 剧集媒体库路径 | 独立分库时配置 |
+| `anime_library_paths` | 动漫媒体库路径 | 独立分库时配置 |
+| `exclude_patterns` | 扫描排除正则 | 排除缓存和临时目录 |
+| `protected_local_paths` | 禁止本地清理的路径 | 建议配置资源根目录和保种目录 |
+| `protected_115_paths` | 禁止云端清理的路径 | 启用云端删除前必须审查 |
+| `keep_strategy` | 重复项保留策略 | 默认 `quality_then_naming` |
+| `delete_sidecar_files` | 清理重复 STRM 独占的 NFO、缩略图和 MediaInfo | 默认关闭 |
+| `delete_orphan_sidecar_files` | 清理电影或季目录中无法归属 STRM 的伴随文件 | 默认关闭，字幕与剧级文件不处理 |
+| `delete_empty_dirs` | 清理空目录 | 电视剧仅处理季目录 |
+| `local_delete_mode` | `quarantine` 或 `delete` | 建议保持 `quarantine` |
+| `max_delete_count` | 单次最大处理数量 | 初次使用设置较小值 |
+| `sync_delete_115` | 同步清理 115 文件 | 完成本地演练后再开启 |
+| `dry_run` | 仅生成执行结果，不实际清理 | 初次使用必须开启 |
+| `require_confirm` | 执行前要求确认 | 建议始终开启 |
+| `cron` | 定时扫描表达式 | 确认手动流程稳定后再配置 |
+
+## 常用 API
+
+插件 API 统一位于 `/api/v1/plugin/EmbyLibraryOrganizer`：
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `POST` | `/scan` | 扫描媒体库并生成计划 |
+| `POST` | `/scan_orphan_metadata` | 仅扫描多余元数据并生成清理计划 |
+| `POST` | `/scan_missing_metadata` | 按所选二级分类查询缺失NFO或MediaInfo的STRM |
+| `GET` | `/categories` | 获取自动识别的媒体库二级分类 |
+| `POST` | `/delete_missing_strm` | 清理指定缺失项STRM及可选联动元数据 |
+| `POST` | `/delete_episode_group` | 清理电视剧季目录中仅集号不同的同格式STRM及联动元数据 |
+| `GET` | `/validate` | 校验当前配置 |
+| `GET` | `/plan` | 查询最近计划 |
+| `GET` | `/groups` | 查询重复组和关联动作 |
+| `POST` | `/group/keep` | 修改重复组保留项 |
+| `POST` | `/preflight` | 预检 115 删除动作 |
+| `GET` | `/confirm_token` | 获取当前计划确认 token |
+| `POST` | `/execute` | 执行最近计划 |
+| `GET` | `/quarantine` | 查询隔离文件 |
+| `POST` | `/restore` | 恢复单个隔离文件 |
+| `POST` | `/restore_batch` | 恢复一个执行批次 |
+| `POST` | `/export` | 导出整理计划 |
+| `POST` | `/export_execution` | 导出执行报告 |
+
+所有接口均使用 MoviePilot 插件 API 鉴权机制。
 
 ## 仓库结构
 
 ```text
 MoviePilot-Plugins/
-├── plugins/                 # 默认插件目录，通常也是兼容旧版本或通用版本的入口
-├── plugins.v2/              # V2 专用插件目录
-├── icons/                   # 插件图标资源
-├── package.json             # 默认插件索引；可通过 "v2": true 声明兼容 V2
-├── package.v2.json          # V2 优先插件索引
-├── docs/                    # 开发与维护文档
-└── .github/workflows/       # 发布工作流
+├── package.v2.json
+├── plugins.v2/
+│   └── embylibraryorganizer/
+│       ├── __init__.py
+│       └── core.py
+└── tests/v2/embylibraryorganizer/
+    └── test_plugin.py
 ```
 
-## 版本与加载规则
+## 开发验证
 
-- MoviePilot 会优先读取 `package.v2.json` 中与当前版本标识匹配的插件定义。
-- 如果某个插件不在 `package.v2.json` 中，但其 `package.json` 条目声明了 `"v2": true`，则会作为“兼容 V2 的默认插件”继续显示和安装。
-- `package.v2.json` 中的插件代码通常放在 `plugins.v2/<plugin_id_lower>/`；`package.json` 中的插件代码通常放在 `plugins/<plugin_id_lower>/`。
-- 插件如果依赖特定主系统版本，可在条目中增加 `system_version`，格式参考 pip 依赖版本范围，例如 `">=2.12.0,<3"`；未定义该字段时不做主系统版本检查。
-- 插件目录名必须是插件类名的小写形式，插件主类必须定义在对应目录的 `__init__.py` 中。
-- 插件市场里看到的版本、图标、作者、权限级别，都来自 `package.json` / `package.v2.json`；运行时真正生效的类属性来自插件代码中的 `plugin_*` 字段，两者必须保持同步。
+插件运行在 MoviePilot 后端环境中。修改后至少运行：
 
-## 第三方插件库开发说明
-> 请不要开发用于破解 MoviePilot 用户认证、色情、赌博等违法违规内容的插件，共同维护健康的开发环境。
-
-
-### 1. 目录结构
-- 插件仓库建议直接 fork 本项目并保持同样的目录布局，仅支持 GitHub 仓库。
-- `plugins` 和 `plugins.v2` 都是“一个插件一个目录”的结构，**目录名必须为插件类名的小写**，插件主类放在对应目录的 `__init__.py` 中。
-- `package.json` / `package.v2.json` 是插件市场的索引文件。MoviePilot 会按版本选择合适的索引读取插件信息，因此这两个文件中的元数据需要和插件代码保持一致。
-- 如果插件带有独立文档、示例或远程组件产物，建议放在插件目录下并在插件目录内提供 `README.md` 说明。
-
-### 2. 插件图标
-- 优先复用官方插件库 `icons/` 下已有图标；如需自定义图标，也可以在元数据中使用完整的 HTTP 图片 URL。
-- `package.json` / `package.v2.json` 里的 `icon` 与插件类中的 `plugin_icon` 应保持一致。
-- 插件卡片背景色会自动提取图标主色调，因此图标尽量避免透明度过高或主体过小。
-
-### 3. 插件命名
-- 插件 ID 以插件类名为准，例如 `class MyPlugin(_PluginBase)` 对应目录名 `myplugin`、插件 ID `MyPlugin`。
-- 插件命名请勿与官方库中的现有插件冲突，否则在用户升级 MoviePilot 或同步插件市场时，可能被官方同名插件覆盖。
-- 如果插件未来需要支持“插件分身”，请不要在代码中硬编码原始插件 ID，尽量使用 `self.__class__.__name__` 作为配置和数据命名空间。
-
-### 4. 依赖
-- 可在插件目录中放置 `requirements.txt` 文件声明额外依赖，MoviePilot 安装插件时会自动安装。
-- 依赖尽量保持最小化，优先复用主程序已提供的公共能力，例如下载器、媒体服务器、通知渠道、缓存、链式处理等封装。
-- 插件依赖安装在 MoviePilot 的共享 Python 运行环境中，不是每个插件独立虚拟环境。不要在插件 `requirements.txt` 中重新声明或覆盖主程序已经提供的依赖版本。
-- MoviePilot 会在安装前保护主程序依赖图：核心依赖会严格锁定当前版本，其他主程序依赖也不能被插件要求降级或改成不兼容版本；发生冲突时插件安装会被拒绝。
-- 如果插件还依赖 Vue 远程组件，请将前端依赖放在独立的前端工程中构建后再产出到插件目录，不要把前端源码直接混入主插件包。
-
-### 5. 界面开发
-- 插件支持 `插件配置`、`详情展示`、`仪表板 Widget` 三类界面，V2 下还可以通过 Vue 联邦远程组件扩展侧栏全页入口。
-- 推荐先判断你的界面属于哪一类：
-  1. 纯配置表单、简单详情展示、轻量数据表，优先使用 Vuetify JSON 配置方式。
-  2. 交互复杂、状态较多、需要独立全页或自定义布局时，使用 Vue 联邦远程组件。
-- Vuetify JSON 模式说明：
-  - `props.model` 等效于 `v-model`，`props.show` 等效于 `v-show`。
-  - 插件配置页面的 `props` 支持表达式，使用 `{{ ... }}` 包裹。
-  - 事件以 `on` 开头，例如 `onclick`、`onchange`。
-  - 详情页面和仪表板可通过 `events` 发起 API 调用。
-- Vue 联邦模式说明：
-  - 插件后端需要实现 `get_render_mode()` 并返回 `("vue", "dist/assets")`。
-  - `get_page()` 对应插件管理中的详情弹窗；如果需要在主界面左侧导航新增全页入口，还需要实现 `get_sidebar_nav()` 并暴露 `AppPage` 远程组件。
-  - 远程组件的构建、暴露名约定、侧栏多入口、静态资源打包方式，请参考 [模块联邦开发指南](https://github.com/jxxghp/MoviePilot-Frontend/blob/v2/docs/module-federation-guide.md)。
-
-### 6. 开发与校验建议
-- 这个仓库只提供插件源码与索引，不提供完整宿主环境。开发后应至少在 `MoviePilot` 宿主里完成一次真实加载验证。
-- 对 Python 插件代码，建议在宿主仓库环境中执行最小校验，例如：
-  - `python3 -m py_compile <touched_files>`
-  - `python3 -m compileall <touched_plugin_dirs>`
-  - `python3 .github/scripts/check_plugin_versions.py package.json package.v2.json`
-  - `git diff --check`
-- 如果插件带有 Vue 远程组件，建议在对应前端工程中执行：
-  - `yarn typecheck`
-  - `yarn build`
-- 如果插件接口依赖 MoviePilot 新增的后端能力或前端入口，请同步更新对应主仓库文档，避免文档和运行时行为脱节。
-
-### 7. 元数据同步要求
-- `package.json` / `package.v2.json` 中的 `version` 必须与插件类中的 `plugin_version` 保持一致，否则用户会看到错误的升级提示。
-- `name`、`description`、`icon`、`author`、`level` 建议与插件类属性保持一致，避免插件市场展示与实际运行信息不一致。
-- `history` 用于展示插件更新日志，建议每次发布都补齐一条可读变更说明。
-- `system_version` 用于声明插件可安装的 MoviePilot 主系统版本范围，格式参考 pip 依赖版本约束；例如插件依赖 v2.12.0 新增能力时填写 `">=2.12.0"`。
-- 需要走 GitHub Release 压缩包分发的插件，请在对应索引条目中增加 `"release": true`，并确保仓库中的发布工作流能够定位到对应目录。
-- 本仓库提供可选的本地 pre-push hook，用于在推送前检查索引版本与插件 `plugin_version` 是否一致。Git 不会自动启用仓库内 hook；需要本地执行一次 `git config core.hooksPath .githooks`。
-- 本地 hook 只作为提前发现问题的辅助，不能替代 GitHub Actions。PR 门禁和 Release 打包前门禁会继续执行同一版本一致性检查。
-
-
-## 常见问题
-
-主文档只保留 FAQ 标题索引，具体内容请进入对应文档查看。
-
-- [1. 如何扩展消息推送渠道？](./docs/faq/01-extend-notification-channel.md)
-- [2. 如何在插件中实现远程命令响应？](./docs/faq/02-remote-command-handler.md)
-- [3. 如何在插件中对外暴露API？](./docs/faq/03-expose-plugin-api.md)
-- [4. 如何在插件中注册公共定时服务？](./docs/faq/04-register-service.md)
-- [5. 如何通过插件增强MoviePilot的识别功能？](./docs/faq/05-enhance-recognition.md)
-- [6. 如何扩展内建索引器的索引站点？](./docs/faq/06-extend-indexer-sites.md)
-- [7. 如何在插件中调用API接口？](./docs/faq/07-call-api-from-plugin.md)
-- [8. 如何将插件内容显示到仪表板？](./docs/faq/08-render-dashboard.md)
-- [9. 如何扩展探索功能的媒体数据源？](./docs/faq/09-extend-discovery-source.md)
-- [10. 如何扩展推荐功能的媒体数据源？](./docs/faq/10-extend-recommend-source.md)
-- [11. 如何通过插件重载实现系统模块功能？](./docs/faq/11-override-system-module.md)
-- [12. 如何通过插件扩展支持的存储类型？](./docs/faq/12-extend-storage-type.md)
-- [13. 如何将插件功能集成到工作流？](./docs/faq/13-integrate-workflow.md)
-- [14. 如何在插件中通过消息持续与用户交互？](./docs/faq/14-message-interaction.md)
-- [15. 如何在插件中使用系统级统一缓存？](./docs/faq/15-use-system-cache.md)
-- [16. 如何在插件中注册智能体工具？](./docs/faq/16-register-agent-tools.md)
-- [17. 如何将插件页面注册到主界面左侧导航栏？](./docs/faq/17-register-plugin-sidebar-nav.md)
-- [18. 如何限定插件可安装的 MoviePilot 主系统版本？](./docs/faq/18-limit-moviepilot-version.md)
-
-## 版本发布
-
-### 1. 如何发布插件版本？
-- 修改插件代码后，需要同步更新对应索引文件中的 `version`，MoviePilot 才会提示用户有更新。这里的版本号需要与插件类中的 `plugin_version` 保持一致。
-- 默认插件改 `package.json`，V2 专用插件改 `package.v2.json`；如果一个插件同时在两个索引文件中维护，需要分别确认目标版本与兼容策略。
-- 索引中的 `level` 用于定义插件用户可见权限：
-  - `1`：所有用户可见
-  - `2`：站点认证用户可见
-  - `3`：站点与密钥认证后可见
-  - 插件类中的 `auth_level` 还可以使用更高的运行时限制，例如特殊密钥场景
-- `history` 用于展示插件更新日志，建议每次发布都补齐一条可读的变更说明，格式如下：
-```json
-{
-  "history": {
-    "v1.8": "修复空目录删除逻辑",
-    "v1.7": "增加定时清理空目录功能"
-  }
-}
-```
-- 新增加的插件建议追加在索引文件末尾，便于在插件市场中作为较新的条目出现。
-- 如果插件目录文件较多，或你希望用户直接下载压缩包安装，可以在对应索引条目中增加 `"release": true`。
-- 当前仓库的 GitHub Actions 发布工作流只会在 `package.json` 或 `package.v2.json` 发生变更时触发，并且只处理声明了 `"release": true` 的插件。
-- PR 会运行 `Plugin release gate`，用于提前发现 `package.json` / `package.v2.json` 中的 `version` 与插件 `__init__.py` 中 `plugin_version` 不一致的问题。
-- Release 工作流会在打包前再次运行版本门禁；即使变更通过直接推送进入目标分支，版本不一致也会在打包前失败，不会继续生成错误版本的压缩包。
-- 发布工作流会按下面的规则打包与创建 Release：
-  - 插件目录优先在 `plugins/<plugin_id_lower>` 和 `plugins.v2/<plugin_id_lower>` 中查找
-  - Tag 格式为 `插件ID_v插件版本号`
-  - 资产文件名格式为 `插件目录小写_v插件版本号.zip`
-  - 如果自上一个同插件 Tag 以来目录没有变化，则会跳过打包
-  - 如果同名 Tag / Release 已存在，工作流会先删除旧版本再创建新版本
-- 示例：
-```json
-{
-  "release": true
-}
+```bash
+pytest tests/v2/embylibraryorganizer/test_plugin.py
 ```
 
-### 2. 如何开发V2版本的插件以及实现插件多版本兼容？
+同时确认 `package.v2.json` 中的版本与 `EmbyLibraryOrganizer.plugin_version` 一致。
 
-- 请参阅 [V2 版本插件开发指南](./docs/V2_Plugin_Development.md)。
-- 如果你要先理解本仓库与 `MoviePilot` / `MoviePilot-Frontend` 的分工，以及元数据和发布链路，再开始写代码，建议先看 [仓库指南](./docs/Repository_Guide.md)。
+MoviePilot 插件开发资料：
+
+- [仓库指南](./docs/Repository_Guide.md)
+- [V2 插件开发指南](./docs/V2_Plugin_Development.md)
+- [常见问题](./docs/FAQ.md)
+
+## 许可证
+
+本仓库使用 [GNU General Public License v3.0](./LICENSE)。

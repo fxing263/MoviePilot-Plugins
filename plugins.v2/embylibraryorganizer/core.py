@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from time import monotonic
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlunparse
 
@@ -16,21 +17,33 @@ from app.schemas import FileItem
 
 
 PLUGIN_ID = "EmbyLibraryOrganizer"
+SCAN_PROGRESS_INTERVAL = 100
 STORAGE_115_NAME = "115网盘Plus"
 STRM_SUFFIX = ".strm"
-SIDECAR_SUFFIXES = {
-    ".nfo",
+NFO_SUFFIX = ".nfo"
+MEDIAINFO_NAME_SUFFIX = "-mediainfo.json"
+FILE_THUMB_STEM_SUFFIX = "-thumb"
+IMAGE_SIDECAR_SUFFIXES = {
     ".jpg",
     ".jpeg",
     ".png",
     ".webp",
     ".tbn",
-    ".srt",
-    ".ass",
-    ".ssa",
-    ".vtt",
-    ".sub",
 }
+MOVIE_DIRECTORY_IMAGE_STEMS = {
+    "backdrop",
+    "banner",
+    "clearlogo",
+    "fanart",
+    "landscape",
+    "logo",
+    "poster",
+    "thumb",
+}
+SEASON_DIRECTORY_PATTERN = re.compile(r"(?i)^Season\s+(?P<season>\d{1,2})$")
+SERIES_SEASON_IMAGE_PATTERN = re.compile(
+    r"(?i)^season(?:-specials|\d{1,2})-poster\.(?:jpg|jpeg|png|webp|tbn)$"
+)
 TRASH_FILE_NAMES = {
     ".DS_Store",
     "Thumbs.db",
@@ -70,6 +83,86 @@ KEEP_STRATEGIES = {
     "largest",
 }
 UNSAFE_TASK_ID_PATTERN = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def _is_season_directory(path: Path) -> bool:
+    """判断路径是否为电视剧季目录。"""
+    return bool(SEASON_DIRECTORY_PATTERN.fullmatch(path.name))
+
+
+def _is_movie_directory_image(path: Path) -> bool:
+    """判断文件是否为电影目录共享图片。"""
+    return (
+        path.suffix.casefold() in IMAGE_SIDECAR_SUFFIXES
+        and path.stem.casefold() in MOVIE_DIRECTORY_IMAGE_STEMS
+    )
+
+
+def _is_series_metadata_marker(path: Path) -> bool:
+    """判断文件是否可用于识别电视剧剧级目录。"""
+    name = path.name.casefold()
+    return name == "tvshow.nfo" or bool(SERIES_SEASON_IMAGE_PATTERN.fullmatch(name))
+
+
+def _is_series_directory(path: Path) -> bool:
+    """判断目录是否为包含剧级元数据或季目录的电视剧目录。"""
+    try:
+        return any(
+            _is_season_directory(candidate)
+            or _is_series_metadata_marker(candidate)
+            for candidate in path.iterdir()
+        )
+    except OSError:
+        return True
+
+
+def _file_sidecar_owner_stem(path: Path, season_directory: bool) -> Optional[str]:
+    """解析文件级伴随文件对应的 STRM stem。"""
+    name = path.name.casefold()
+    suffix = path.suffix.casefold()
+    if suffix == NFO_SUFFIX:
+        if season_directory and name == "season.nfo":
+            return None
+        return path.stem.casefold()
+    if name.endswith(MEDIAINFO_NAME_SUFFIX):
+        owner_stem = name[: -len(MEDIAINFO_NAME_SUFFIX)]
+        return owner_stem or None
+    if suffix in IMAGE_SIDECAR_SUFFIXES:
+        stem = path.stem.casefold()
+        if stem.endswith(FILE_THUMB_STEM_SUFFIX):
+            owner_stem = stem[: -len(FILE_THUMB_STEM_SUFFIX)]
+            return owner_stem or None
+    return None
+
+
+def _is_supported_sidecar_path(path: Path, library_type: str) -> bool:
+    """判断路径是否符合当前允许清理的伴随文件规则。"""
+    season_directory = _is_season_directory(path.parent)
+    if not season_directory and (
+        library_type in ("tv", "anime") or _is_series_directory(path.parent)
+    ):
+        return False
+    if path.name in TRASH_FILE_NAMES or path.suffix.casefold() in TRASH_SUFFIXES:
+        return True
+    return _file_sidecar_owner_stem(path, season_directory) is not None
+
+
+def _owned_sidecar_paths(strm_path: Path) -> List[Path]:
+    """返回指定 STRM 独占的现有伴随文件。"""
+    owner_stem = strm_path.stem.casefold()
+    season_directory = _is_season_directory(strm_path.parent)
+    return sorted(
+        candidate
+        for candidate in strm_path.parent.iterdir()
+        if not candidate.is_symlink()
+        and candidate.is_file()
+        and _file_sidecar_owner_stem(candidate, season_directory) == owner_stem
+    )
+
+
+def owned_sidecar_paths(strm_path: Path) -> List[Path]:
+    """返回可随指定 STRM 联动清理的现有元数据文件。"""
+    return _owned_sidecar_paths(strm_path)
 
 
 class IssueLevel(str, Enum):
@@ -159,6 +252,7 @@ class StrmIdentity:
     pickcode: Optional[str] = None
     cloud_path: Optional[str] = None
     is_url: bool = False
+    is_absolute_path: bool = False
     is_115: bool = False
     parse_errors: List[str] = field(default_factory=list)
 
@@ -352,6 +446,11 @@ class StrmParser:
         identity.host = parsed.netloc.lower()
         identity.is_url = bool(parsed.scheme and parsed.netloc)
         if not identity.is_url:
+            if Path(original_url).is_absolute():
+                identity.is_absolute_path = True
+                identity.cloud_path = self._normalize_cloud_path(original_url)
+                identity.is_115 = self._is_115_url(identity)
+                return identity
             identity.parse_errors.append("STRM内容不是有效URL")
             return identity
 
@@ -472,7 +571,7 @@ class MediaKeyResolver:
     """媒体文件归一化键解析器。"""
 
     _episode_pattern = re.compile(r"(?i)\bS(?P<season>\d{1,2})E(?P<episode>\d{1,3})\b")
-    _season_dir_pattern = re.compile(r"(?i)^Season\s+(?P<season>\d{1,2})$")
+    _season_dir_pattern = SEASON_DIRECTORY_PATTERN
     _loose_episode_pattern = re.compile(
         r"(?i)(?:^|[\s._\-\[\(第])(?P<episode>\d{1,3})(?:$|[\s._\-\]\)集话])"
     )
@@ -654,17 +753,34 @@ class LibraryScanner:
             if pattern
         ]
 
-    def scan(self) -> ScanResult:
-        """扫描所有配置的媒体库。"""
+    def scan(
+        self,
+        orphan_metadata_only: bool = False,
+        missing_metadata_only: bool = False,
+    ) -> ScanResult:
+        """扫描配置的媒体库，可限定为多余或缺失元数据检查。"""
+        scan_started = monotonic()
         started_at = self._now()
         files: List[LibraryFile] = []
         issues: List[ScanIssue] = []
         directory_paths: Set[Path] = set()
         directories_with_files: Set[Path] = set()
+        directory_library_types: Dict[Path, str] = {}
+        library_count = len(self.config.library_paths)
+        logger.info(f"【{PLUGIN_ID}】开始扫描媒体库：根目录数量={library_count}")
 
-        for library_root in self.config.library_paths:
+        for library_index, library_root in enumerate(self.config.library_paths, start=1):
+            library_started = monotonic()
+            library_file_start = len(files)
+            library_issue_start = len(issues)
             root = library_root.expanduser().resolve()
+            library_type = self.config.library_types.get(root.as_posix(), "mixed")
+            logger.info(
+                f"【{PLUGIN_ID}】扫描媒体库 {library_index}/{library_count}："
+                f"类型={library_type}，路径={root}"
+            )
             if not root.exists():
+                logger.error(f"【{PLUGIN_ID}】媒体库路径不存在：{root}")
                 issues.append(
                     ScanIssue(
                         level=IssueLevel.ERROR,
@@ -676,6 +792,7 @@ class LibraryScanner:
                 )
                 continue
             if not root.is_dir():
+                logger.error(f"【{PLUGIN_ID}】媒体库路径不是目录：{root}")
                 issues.append(
                     ScanIssue(
                         level=IssueLevel.ERROR,
@@ -685,18 +802,28 @@ class LibraryScanner:
                     )
                 )
                 continue
-            library_type = self.config.library_types.get(root.as_posix(), "mixed")
             for item_path in self._walk(root):
                 if self._is_excluded(item_path):
                     continue
                 try:
                     if item_path.is_dir():
                         directory_paths.add(item_path)
+                        directory_library_types[item_path] = library_type
                         continue
                     directories_with_files.add(item_path.parent)
                     file_record = self._build_file_record(item_path, root, library_type)
                     files.append(file_record)
-                    self._inspect_file(file_record, issues)
+                    if missing_metadata_only:
+                        self._inspect_missing_metadata_files(file_record, issues)
+                    elif not orphan_metadata_only:
+                        self._inspect_file(file_record, issues)
+                    library_file_count = len(files) - library_file_start
+                    if library_file_count % SCAN_PROGRESS_INTERVAL == 0:
+                        logger.info(
+                            f"【{PLUGIN_ID}】扫描进度 {library_index}/{library_count}："
+                            f"已处理文件={library_file_count}，当前问题="
+                            f"{len(issues) - library_issue_start}，路径={root}"
+                        )
                 except OSError as err:
                     issues.append(
                         ScanIssue(
@@ -706,16 +833,38 @@ class LibraryScanner:
                             message=f"文件读取失败：{str(err)}",
                         )
                     )
+            logger.info(
+                f"【{PLUGIN_ID}】媒体库扫描完成 {library_index}/{library_count}："
+                f"文件={len(files) - library_file_start}，"
+                f"问题={len(issues) - library_issue_start}，"
+                f"耗时={monotonic() - library_started:.2f}秒，路径={root}"
+            )
 
-        self._inspect_empty_dirs(directory_paths, directories_with_files, issues)
-        self._inspect_orphan_sidecars(files, issues)
+        if not orphan_metadata_only and not missing_metadata_only:
+            logger.info(f"【{PLUGIN_ID}】目录遍历完成，开始检查空目录")
+            self._inspect_empty_dirs(
+                directory_paths,
+                directories_with_files,
+                directory_library_types,
+                issues,
+            )
+        if not missing_metadata_only:
+            logger.info(f"【{PLUGIN_ID}】开始检查多余元数据文件")
+            self._inspect_orphan_sidecars(files, issues)
         finished_at = self._now()
+        summary = self._build_scan_summary(files, issues)
+        logger.info(
+            f"【{PLUGIN_ID}】媒体库扫描完成：文件={summary['file_count']}，"
+            f"STRM={summary['strm_count']}，问题={summary['issue_count']}，"
+            f"错误={summary['error_count']}，警告={summary['warning_count']}，"
+            f"耗时={monotonic() - scan_started:.2f}秒"
+        )
         return ScanResult(
             started_at=started_at,
             finished_at=finished_at,
             files=files,
             issues=issues,
-            summary=self._build_scan_summary(files, issues),
+            summary=summary,
         )
 
     def _walk(self, root: Path) -> Iterable[Path]:
@@ -804,6 +953,14 @@ class LibraryScanner:
     def _inspect_file(self, file_record: LibraryFile, issues: List[ScanIssue]) -> None:
         """检查单个文件的基础问题。"""
         path = file_record.path
+        if (
+            not _is_season_directory(path.parent)
+            and (
+                file_record.library_type in ("tv", "anime")
+                or _is_series_directory(path.parent)
+            )
+        ):
+            return
         if path.name in TRASH_FILE_NAMES or file_record.suffix in TRASH_SUFFIXES:
             issues.append(
                 ScanIssue(
@@ -839,13 +996,13 @@ class LibraryScanner:
                 )
             )
         identity = file_record.identity
-        if not identity or not identity.is_url:
+        if not identity or not (identity.is_url or identity.is_absolute_path):
             issues.append(
                 ScanIssue(
                     level=IssueLevel.ERROR,
                     code="invalid_strm_url",
                     path=path.as_posix(),
-                    message="STRM内容不是有效URL",
+                    message="STRM内容不是有效URL或绝对路径",
                 )
             )
             return
@@ -957,33 +1114,71 @@ class LibraryScanner:
                 )
             )
 
+    def _inspect_missing_metadata_files(
+        self,
+        file_record: LibraryFile,
+        issues: List[ScanIssue],
+    ) -> None:
+        """检查 STRM 是否缺少同名 NFO 或 MediaInfo。"""
+        if file_record.suffix != STRM_SUFFIX:
+            return
+        path = file_record.path
+        if file_record.library_type in ("tv", "anime") and not _is_season_directory(
+            path.parent
+        ):
+            return
+        nfo_path = path.with_suffix(NFO_SUFFIX)
+        if not nfo_path.exists():
+            issues.append(
+                ScanIssue(
+                    level=IssueLevel.INFO,
+                    code="missing_nfo",
+                    path=path.as_posix(),
+                    message="STRM缺少同名NFO文件",
+                    suggestion=nfo_path.as_posix(),
+                )
+            )
+        mediainfo_path = path.with_name(f"{path.stem}{MEDIAINFO_NAME_SUFFIX}")
+        if not mediainfo_path.exists():
+            issues.append(
+                ScanIssue(
+                    level=IssueLevel.INFO,
+                    code="missing_mediainfo",
+                    path=path.as_posix(),
+                    message="STRM缺少同名MediaInfo文件",
+                    suggestion=mediainfo_path.as_posix(),
+                )
+            )
+
     @staticmethod
     def _has_related_image(path: Path) -> bool:
         """判断 STRM 是否存在相关图片。"""
-        image_suffixes = {".jpg", ".jpeg", ".png", ".webp"}
-        if any(path.with_suffix(suffix).exists() for suffix in image_suffixes):
+        if any(
+            sidecar_path.suffix.casefold() in IMAGE_SIDECAR_SUFFIXES
+            for sidecar_path in _owned_sidecar_paths(path)
+        ):
             return True
-        directory_image_names = {
-            "poster",
-            "fanart",
-            "thumb",
-            "folder",
-            "cover",
-        }
+        if _is_season_directory(path.parent):
+            return False
         return any(
-            (path.parent / f"{name}{suffix}").exists()
-            for name in directory_image_names
-            for suffix in image_suffixes
+            candidate.is_file() and _is_movie_directory_image(candidate)
+            for candidate in path.parent.iterdir()
         )
 
     @staticmethod
     def _inspect_empty_dirs(
         directory_paths: Set[Path],
         directories_with_files: Set[Path],
+        directory_library_types: Dict[Path, str],
         issues: List[ScanIssue],
     ) -> None:
         """检查空目录。"""
         for directory in sorted(directory_paths):
+            library_type = directory_library_types.get(directory, "mixed")
+            if library_type in ("tv", "anime", "mixed") and not _is_season_directory(
+                directory
+            ):
+                continue
             if directory not in directories_with_files and not any(directory.iterdir()):
                 issues.append(
                     ScanIssue(
@@ -998,24 +1193,41 @@ class LibraryScanner:
     @staticmethod
     def _inspect_orphan_sidecars(files: List[LibraryFile], issues: List[ScanIssue]) -> None:
         """检查没有对应 STRM 的伴随文件。"""
-        strm_stems = {
-            file.path.with_suffix("").as_posix()
-            for file in files
-            if file.suffix == STRM_SUFFIX
-        }
+        strm_stems_by_directory: Dict[Path, Set[str]] = {}
+        series_directories: Set[Path] = set()
         for file in files:
-            if file.suffix not in SIDECAR_SUFFIXES:
-                continue
-            if file.path.with_suffix("").as_posix() not in strm_stems:
-                issues.append(
-                    ScanIssue(
-                        level=IssueLevel.INFO,
-                        code="orphan_sidecar",
-                        path=file.path.as_posix(),
-                        message="发现没有对应STRM的伴随文件",
-                        suggestion="确认不再使用后可随重复项清理",
-                    )
+            parent = file.path.parent
+            if _is_season_directory(parent):
+                series_directories.add(parent.parent)
+            if _is_series_metadata_marker(file.path):
+                series_directories.add(parent)
+            if file.suffix == STRM_SUFFIX:
+                strm_stems_by_directory.setdefault(parent, set()).add(
+                    file.path.stem.casefold()
                 )
+        for file in files:
+            parent = file.path.parent
+            season_directory = _is_season_directory(parent)
+            if not season_directory and (
+                file.library_type in ("tv", "anime")
+                or parent in series_directories
+            ):
+                continue
+            owner_stem = _file_sidecar_owner_stem(file.path, season_directory)
+            if not owner_stem:
+                continue
+            strm_stems = strm_stems_by_directory.get(parent, set())
+            if owner_stem in strm_stems:
+                continue
+            issues.append(
+                ScanIssue(
+                    level=IssueLevel.INFO,
+                    code="orphan_sidecar",
+                    path=file.path.as_posix(),
+                    message="发现没有对应STRM的伴随文件",
+                    suggestion="确认不再使用后可随重复项清理",
+                )
+            )
 
     @staticmethod
     def _build_scan_summary(files: List[LibraryFile], issues: List[ScanIssue]) -> Dict[str, Any]:
@@ -1248,11 +1460,7 @@ class DuplicateAnalyzer:
     @staticmethod
     def _sidecar_score(path: Path) -> int:
         """计算伴随元数据完整度得分。"""
-        score = 0
-        for suffix in SIDECAR_SUFFIXES:
-            if path.with_suffix(suffix).exists():
-                score += 10
-        return score
+        return len(_owned_sidecar_paths(path)) * 10
 
 
 class PlanBuilder:
@@ -1298,7 +1506,9 @@ class PlanBuilder:
                             ),
                         )
                     )
-                if self.config.delete_empty_dirs:
+                if self.config.delete_empty_dirs and self._can_clean_candidate_parent(
+                    candidate_file
+                ):
                     actions.append(
                         self._build_empty_dir_action(task_id, group, candidate_file)
                     )
@@ -1357,7 +1567,9 @@ class PlanBuilder:
                         ),
                     )
                 )
-            if self.config.delete_empty_dirs:
+            if self.config.delete_empty_dirs and self._can_clean_candidate_parent(
+                candidate_file
+            ):
                 actions.append(
                     self._build_empty_dir_action(task_id, group, candidate_file)
                 )
@@ -1393,10 +1605,7 @@ class PlanBuilder:
     ) -> List[PlanAction]:
         """生成伴随文件清理动作。"""
         actions = []
-        for suffix in SIDECAR_SUFFIXES:
-            sidecar_path = file.path.with_suffix(suffix)
-            if not sidecar_path.exists():
-                continue
+        for sidecar_path in _owned_sidecar_paths(file.path):
             sidecar_stat = sidecar_path.stat()
             actions.append(
                 PlanAction(
@@ -1413,6 +1622,13 @@ class PlanBuilder:
                 )
             )
         return actions
+
+    @staticmethod
+    def _can_clean_candidate_parent(file: LibraryFile) -> bool:
+        """判断重复 STRM 的父目录是否允许生成空目录动作。"""
+        if file.library_type in ("tv", "anime"):
+            return _is_season_directory(file.path.parent)
+        return True
 
     def _build_empty_dir_action(
         self,
@@ -1739,9 +1955,16 @@ class PlanExecutor:
         expected_confirm_token: Optional[str] = None,
     ) -> ExecutionReport:
         """执行整理计划。"""
+        execution_started = monotonic()
         started_at = datetime.now().isoformat(timespec="seconds")
         results = []
+        action_count = len(plan.actions)
+        logger.info(
+            f"【{PLUGIN_ID}】开始执行整理计划：task_id={plan.task_id}，"
+            f"动作={action_count}，演练模式={plan.dry_run}，已确认={confirmed}"
+        )
         if plan.require_confirm and not confirmed:
+            logger.warning(f"【{PLUGIN_ID}】整理计划未确认，全部动作将跳过")
             results = [
                 ActionResult(
                     action_id=action.action_id,
@@ -1759,6 +1982,7 @@ class PlanExecutor:
                 expected_confirm_token,
             )
         ):
+            logger.warning(f"【{PLUGIN_ID}】115确认token无效，全部动作将跳过")
             results = [
                 ActionResult(
                     action_id=action.action_id,
@@ -1778,7 +2002,11 @@ class PlanExecutor:
                 if action.allowed and not plan.dry_run
             }
             completed_results: Dict[str, ActionResult] = {}
-            for action in plan.actions:
+            for action_index, action in enumerate(plan.actions, start=1):
+                logger.info(
+                    f"【{PLUGIN_ID}】执行动作 {action_index}/{action_count}："
+                    f"类型={action.action_type.value}，路径={action.path}"
+                )
                 result = self._execute_action(
                     plan,
                     action,
@@ -1787,7 +2015,18 @@ class PlanExecutor:
                 )
                 results.append(result)
                 completed_results[action.action_id] = result
+                logger.info(
+                    f"【{PLUGIN_ID}】动作结果 {action_index}/{action_count}："
+                    f"状态={result.status.value}，说明={result.message}，路径={result.path}"
+                )
         finished_at = datetime.now().isoformat(timespec="seconds")
+        summary = self._build_execution_summary(results)
+        logger.info(
+            f"【{PLUGIN_ID}】整理计划执行完成：task_id={plan.task_id}，"
+            f"完成={summary['done_count']}，演练={summary['dry_run_count']}，"
+            f"跳过={summary['skipped_count']}，失败={summary['failed_count']}，"
+            f"耗时={monotonic() - execution_started:.2f}秒"
+        )
         return ExecutionReport(
             task_id=plan.task_id,
             started_at=started_at,
@@ -1795,7 +2034,7 @@ class PlanExecutor:
             dry_run=plan.dry_run,
             confirmed=confirmed,
             results=results,
-            summary=self._build_execution_summary(results),
+            summary=summary,
         )
 
     def _execute_action(
@@ -1814,6 +2053,10 @@ class PlanExecutor:
                 status=ActionStatus.SKIPPED,
                 message=action.skip_reason or "动作未被允许执行",
             )
+        if action.action_type == ActionType.DELETE_SIDECAR:
+            invalid_sidecar_result = self._validate_sidecar_action(action)
+            if invalid_sidecar_result:
+                return invalid_sidecar_result
         if plan.dry_run:
             return ActionResult(
                 action_id=action.action_id,
@@ -1856,6 +2099,42 @@ class PlanExecutor:
         if action.action_type == ActionType.DELETE_EMPTY_DIR:
             return self._delete_empty_dir(action)
         return self._delete_local_path(plan.task_id, action)
+
+    def _validate_sidecar_action(self, action: PlanAction) -> Optional[ActionResult]:
+        """按当前规则拒绝旧计划中的过期伴随文件动作。"""
+        path = Path(action.path)
+        library_type = self._library_type_for_path(path)
+        if _is_supported_sidecar_path(path, library_type):
+            return None
+        return ActionResult(
+            action_id=action.action_id,
+            action_type=action.action_type,
+            path=action.path,
+            status=ActionStatus.SKIPPED,
+            message="文件不符合当前伴随文件清理规则，请重新扫描",
+        )
+
+    def _library_type_for_path(self, path: Path) -> str:
+        """返回本地路径所属的最具体媒体库类型。"""
+        try:
+            resolved_path = path.expanduser().resolve()
+        except OSError:
+            resolved_path = path.expanduser().absolute()
+        matches: List[Tuple[int, str]] = []
+        for library_path in self.config.library_paths:
+            try:
+                resolved_root = library_path.expanduser().resolve()
+                resolved_path.relative_to(resolved_root)
+            except (OSError, ValueError):
+                continue
+            library_type = self.config.library_types.get(
+                resolved_root.as_posix(),
+                self.config.library_types.get(library_path.as_posix(), "mixed"),
+            )
+            matches.append((len(resolved_root.parts), library_type))
+        if not matches:
+            return "mixed"
+        return max(matches, key=lambda item: item[0])[1]
 
     @staticmethod
     def _requires_cloud_confirm_token(plan: OrganizerPlan) -> bool:
@@ -2845,8 +3124,53 @@ class EmbyLibraryOrganizerEngine:
     def create_plan(self) -> OrganizerPlan:
         """扫描媒体库并生成整理计划。"""
         scan_result = self.scanner.scan()
+        logger.info(
+            f"【{PLUGIN_ID}】开始分析重复媒体：STRM={scan_result.summary['strm_count']}"
+        )
         duplicate_groups = self.analyzer.analyze(scan_result.files)
-        return self.plan_builder.build(scan_result, duplicate_groups)
+        logger.info(
+            f"【{PLUGIN_ID}】重复分析完成：重复组={len(duplicate_groups)}，开始生成整理计划"
+        )
+        plan = self.plan_builder.build(scan_result, duplicate_groups)
+        logger.info(
+            f"【{PLUGIN_ID}】整理计划生成完成：task_id={plan.task_id}，"
+            f"动作={plan.summary['action_count']}，"
+            f"允许={plan.summary['allowed_action_count']}，"
+            f"阻止={plan.summary['blocked_action_count']}，"
+            f"高风险={plan.summary['high_risk_action_count']}"
+        )
+        return plan
+
+    def create_orphan_metadata_plan(self) -> OrganizerPlan:
+        """仅扫描多余元数据并生成清理计划。"""
+        scan_result = self.scanner.scan(orphan_metadata_only=True)
+        orphan_count = scan_result.summary["issue_code_counts"].get(
+            "orphan_sidecar",
+            0,
+        )
+        logger.info(
+            f"【{PLUGIN_ID}】多余元数据扫描完成：候选={orphan_count}，开始生成清理计划"
+        )
+        plan = self.plan_builder.build(scan_result, [])
+        logger.info(
+            f"【{PLUGIN_ID}】多余元数据清理计划生成完成：task_id={plan.task_id}，"
+            f"动作={plan.summary['action_count']}，"
+            f"允许={plan.summary['allowed_action_count']}，"
+            f"阻止={plan.summary['blocked_action_count']}"
+        )
+        return plan
+
+    def create_missing_metadata_plan(self) -> OrganizerPlan:
+        """仅扫描 STRM 缺失元数据并生成查询结果。"""
+        scan_result = self.scanner.scan(missing_metadata_only=True)
+        issue_counts = scan_result.summary["issue_code_counts"]
+        missing_nfo_count = issue_counts.get("missing_nfo", 0)
+        missing_mediainfo_count = issue_counts.get("missing_mediainfo", 0)
+        logger.info(
+            f"【{PLUGIN_ID}】缺失元数据查询完成：缺少NFO={missing_nfo_count}，"
+            f"缺少MediaInfo={missing_mediainfo_count}"
+        )
+        return self.plan_builder.build(scan_result, [])
 
     def execute_plan(
         self,

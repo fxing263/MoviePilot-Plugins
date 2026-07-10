@@ -766,11 +766,13 @@ class LibraryScanner:
         directory_paths: Set[Path] = set()
         directories_with_files: Set[Path] = set()
         directory_library_types: Dict[Path, str] = {}
+        targeted_metadata_scan = orphan_metadata_only or missing_metadata_only
         library_count = len(self.config.library_paths)
         logger.info(f"【{PLUGIN_ID}】开始扫描媒体库：根目录数量={library_count}")
 
         for library_index, library_root in enumerate(self.config.library_paths, start=1):
             library_started = monotonic()
+            library_entry_count = 0
             library_file_start = len(files)
             library_issue_start = len(issues)
             root = library_root.expanduser().resolve()
@@ -802,16 +804,30 @@ class LibraryScanner:
                     )
                 )
                 continue
-            for item_path in self._walk(root):
+            for item_path, is_directory in self._walk(root):
+                library_entry_count += 1
                 if self._is_excluded(item_path):
                     continue
                 try:
-                    if item_path.is_dir():
-                        directory_paths.add(item_path)
-                        directory_library_types[item_path] = library_type
+                    if is_directory:
+                        if not targeted_metadata_scan:
+                            directory_paths.add(item_path)
+                            directory_library_types[item_path] = library_type
                         continue
-                    directories_with_files.add(item_path.parent)
-                    file_record = self._build_file_record(item_path, root, library_type)
+                    if targeted_metadata_scan and not self._is_metadata_scan_candidate(
+                        item_path,
+                        orphan_metadata_only=orphan_metadata_only,
+                        missing_metadata_only=missing_metadata_only,
+                    ):
+                        continue
+                    if not targeted_metadata_scan:
+                        directories_with_files.add(item_path.parent)
+                    file_record = self._build_file_record(
+                        item_path,
+                        root,
+                        library_type,
+                        lightweight=targeted_metadata_scan,
+                    )
                     files.append(file_record)
                     if missing_metadata_only:
                         self._inspect_missing_metadata_files(file_record, issues)
@@ -835,7 +851,8 @@ class LibraryScanner:
                     )
             logger.info(
                 f"【{PLUGIN_ID}】媒体库扫描完成 {library_index}/{library_count}："
-                f"文件={len(files) - library_file_start}，"
+                f"遍历项={library_entry_count}，"
+                f"候选文件={len(files) - library_file_start}，"
                 f"问题={len(issues) - library_issue_start}，"
                 f"耗时={monotonic() - library_started:.2f}秒，路径={root}"
             )
@@ -867,8 +884,8 @@ class LibraryScanner:
             summary=summary,
         )
 
-    def _walk(self, root: Path) -> Iterable[Path]:
-        """按最大深度遍历媒体库目录。"""
+    def _walk(self, root: Path) -> Iterable[Tuple[Path, bool]]:
+        """按最大深度遍历媒体库目录并返回目录标记。"""
         root_resolved = root.resolve()
         stack = [root]
         visited_directories = {root_resolved}
@@ -880,7 +897,10 @@ class LibraryScanner:
                 logger.warning(f"【{PLUGIN_ID}】读取目录失败：{current} - {str(err)}")
                 continue
             for child in children:
+                if self._depth(root, child) > self.config.max_depth:
+                    continue
                 try:
+                    resolved_child = None
                     if child.is_symlink():
                         if not self.config.follow_symlinks:
                             continue
@@ -892,17 +912,16 @@ class LibraryScanner:
                                 f"【{PLUGIN_ID}】符号链接目标超出媒体库，已跳过：{child}"
                             )
                             continue
-                    else:
+                    is_directory = child.is_dir()
+                    if is_directory and resolved_child is None:
                         resolved_child = child.resolve()
                 except OSError as err:
                     logger.warning(
                         f"【{PLUGIN_ID}】解析媒体库路径失败：{child} - {str(err)}"
                     )
                     continue
-                if self._depth(root, child) > self.config.max_depth:
-                    continue
-                yield child
-                if child.is_dir():
+                yield child, is_directory
+                if is_directory:
                     if resolved_child in visited_directories:
                         continue
                     visited_directories.add(resolved_child)
@@ -921,9 +940,49 @@ class LibraryScanner:
         path_text = path.as_posix()
         return any(pattern.search(path_text) for pattern in self._exclude_regex)
 
-    def _build_file_record(self, path: Path, root: Path, library_type: str) -> LibraryFile:
+    @staticmethod
+    def _is_metadata_scan_candidate(
+        path: Path,
+        orphan_metadata_only: bool,
+        missing_metadata_only: bool,
+    ) -> bool:
+        """判断文件是否会影响当前元数据专项扫描结果。"""
+        suffix = path.suffix.casefold()
+        if missing_metadata_only:
+            return suffix == STRM_SUFFIX
+        if not orphan_metadata_only:
+            return True
+        if suffix in (STRM_SUFFIX, NFO_SUFFIX):
+            return True
+        name = path.name.casefold()
+        if name.endswith(MEDIAINFO_NAME_SUFFIX):
+            return True
+        if suffix not in IMAGE_SIDECAR_SUFFIXES:
+            return False
+        return (
+            path.stem.casefold().endswith(FILE_THUMB_STEM_SUFFIX)
+            or _is_series_metadata_marker(path)
+        )
+
+    def _build_file_record(
+        self,
+        path: Path,
+        root: Path,
+        library_type: str,
+        lightweight: bool = False,
+    ) -> LibraryFile:
         """构造媒体库文件记录。"""
         suffix = path.suffix.lower()
+        if lightweight:
+            return LibraryFile(
+                path=path,
+                library_root=root,
+                relative_path=path.relative_to(root).as_posix(),
+                suffix=suffix,
+                size=0,
+                modify_time=0,
+                library_type=library_type,
+            )
         stat = path.stat()
         content = None
         identity = None

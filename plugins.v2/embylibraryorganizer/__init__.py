@@ -65,7 +65,7 @@ class EmbyLibraryOrganizer(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/MoviePilot-Frontend/"
         "refs/heads/v2/src/assets/images/misc/emby.png"
     )
-    plugin_version = "1.0.2"
+    plugin_version = "1.0.3"
     plugin_label = "媒体库整理"
     plugin_author = "zhaojg"
     plugin_config_prefix = "embylibraryorganizer_"

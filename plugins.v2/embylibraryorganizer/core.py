@@ -3304,7 +3304,7 @@ def validate_config(config: OrganizerConfig) -> List[ConfigValidationIssue]:
                 level=IssueLevel.ERROR,
                 code="library_paths_required",
                 message="未配置任何媒体库路径",
-                suggestion="请至少配置一个混合、电影、剧集或动漫媒体库路径",
+                suggestion="请至少配置一个混合或蓝光媒体库路径",
             )
         )
     for library_path in config.library_paths:
@@ -3449,11 +3449,7 @@ def _parse_library_paths(config: Dict[str, Any]) -> Tuple[List[Path], Dict[str, 
     for path in _parse_paths(config.get("library_paths")):
         paths.append(path)
         path_types[path.as_posix()] = "mixed"
-    typed_config = {
-        "movie_library_paths": "movie",
-        "tv_library_paths": "tv",
-        "anime_library_paths": "anime",
-    }
+    typed_config = {"bluray_library_paths": "movie"}
     for key, library_type in typed_config.items():
         for path in _parse_paths(config.get(key)):
             if path not in paths:

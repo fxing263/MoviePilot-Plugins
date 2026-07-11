@@ -1,6 +1,14 @@
+import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import List, Optional
 
-from embylibraryorganizer import EmbyLibraryOrganizer
+import embylibraryorganizer as plugin_module
+from embylibraryorganizer import (
+    ALL_CATEGORIES_VALUE,
+    BLURAY_CATEGORY_VALUE,
+    EmbyLibraryOrganizer,
+)
 from embylibraryorganizer.core import (
     ActionStatus,
     ActionType,
@@ -52,7 +60,531 @@ def test_api_paths_are_relative_to_plugin_prefix() -> None:
     paths = [item["path"] for item in plugin.get_api()]
 
     assert "/scan" in paths
+    assert "/ui_state" in paths
+    assert "/delete_preview" in paths
+    assert "/delete_orphan_metadata" in paths
+    assert "/delete_all_orphan_metadata" in paths
+    assert "/delete_orphan_metadata_batch" in paths
     assert all(not path.startswith("/EmbyLibraryOrganizer/") for path in paths)
+
+
+def test_orphan_metadata_scan_requires_selected_category(tmp_path: Path) -> None:
+    """多余元数据扫描未选择分类时应拒绝全库扫描。"""
+    library_root = tmp_path / "media"
+    (library_root / "电影" / "华语电影").mkdir(parents=True)
+    plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
+    plugin._config = {
+        **plugin._default_config(),
+        "library_paths": library_root.as_posix(),
+        "orphan_metadata_categories": [],
+    }
+
+    result = plugin._scan_and_save(orphan_metadata_only=True)
+
+    assert result["code"] == 1
+    assert "多余元数据扫描分类" in result["msg"]
+
+
+def test_orphan_scan_api_saves_submitted_categories(tmp_path: Path) -> None:
+    """管理页提交的多余元数据分类应先保存再启动扫描。"""
+    selected_category = tmp_path / "电影" / "华语电影"
+    selected_category.mkdir(parents=True)
+    plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
+    plugin._config = plugin._default_config()
+    plugin._discover_secondary_categories = lambda: [
+        {
+            "title": "电影 / 华语电影",
+            "value": selected_category.as_posix(),
+            "type": "movie",
+        }
+    ]
+    saved_configs = []
+    plugin.update_config = lambda config: saved_configs.append(config) or True
+    plugin._start_scan_task = lambda **_kwargs: {
+        "code": 0,
+        "msg": "多余元数据扫描已排队",
+    }
+
+    result = plugin.api_scan_orphan_metadata(
+        categories=json.dumps([selected_category.as_posix()]),
+    )
+
+    assert result["code"] == 0
+    assert saved_configs[-1]["orphan_metadata_categories"] == [
+        selected_category.as_posix()
+    ]
+
+
+def test_scan_starts_when_selected_categories_are_already_saved(
+    tmp_path: Path,
+) -> None:
+    """分类配置无变化时也应继续启动扫描任务。"""
+    selected_category = tmp_path / "电视剧" / "国产剧"
+    selected_category.mkdir(parents=True)
+    plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
+    plugin._config = {
+        **plugin._default_config(),
+        "missing_metadata_categories": [selected_category.as_posix()],
+    }
+    plugin._discover_secondary_categories = lambda: [
+        {
+            "title": "电视剧 / 国产剧",
+            "value": selected_category.as_posix(),
+            "type": "tv",
+        }
+    ]
+    plugin.update_config = lambda _config: None
+    plugin._start_scan_task = lambda **_kwargs: {
+        "code": 0,
+        "msg": "缺失元数据查询已排队",
+    }
+
+    result = plugin.api_scan_missing_metadata(
+        categories=json.dumps([selected_category.as_posix()]),
+    )
+
+    assert result["code"] == 0
+    assert result["msg"] == "缺失元数据查询已排队"
+
+
+def test_scan_starts_when_category_persistence_fails(tmp_path: Path) -> None:
+    """分类持久化失败时仍应使用本次选择启动扫描。"""
+    selected_category = tmp_path / "电视剧" / "国产剧"
+    selected_category.mkdir(parents=True)
+    plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
+    plugin._config = plugin._default_config()
+    plugin._discover_secondary_categories = lambda: [
+        {
+            "title": "电视剧 / 国产剧",
+            "value": selected_category.as_posix(),
+            "type": "tv",
+        }
+    ]
+    plugin.update_config = lambda _config: False
+    plugin._start_scan_task = lambda **_kwargs: {
+        "code": 0,
+        "msg": "缺失元数据查询已排队",
+    }
+
+    result = plugin.api_scan_missing_metadata(
+        categories=json.dumps([selected_category.as_posix()]),
+    )
+
+    assert result["code"] == 0
+    assert result["msg"] == "缺失元数据查询已排队"
+
+
+def test_all_category_selection_uses_every_library_root(tmp_path: Path) -> None:
+    """选择全部时应同时使用混合和蓝光媒体库根目录。"""
+    mixed_root = tmp_path / "mixed"
+    bluray_root = tmp_path / "bluray"
+    mixed_root.mkdir()
+    bluray_root.mkdir()
+    plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
+    plugin._config = {
+        **plugin._default_config(),
+        "library_paths": mixed_root.as_posix(),
+        "bluray_library_paths": bluray_root.as_posix(),
+        "orphan_metadata_categories": [ALL_CATEGORIES_VALUE],
+    }
+
+    paths, error = plugin._selected_category_paths(
+        config_key="orphan_metadata_categories",
+        scan_label="多余元数据扫描",
+    )
+
+    assert error is None
+    assert paths == [mixed_root, bluray_root]
+
+
+def test_all_category_scan_includes_bluray_library(tmp_path: Path) -> None:
+    """全量扫描应检查不参与分类识别的蓝光媒体库。"""
+    bluray_root = tmp_path / "bluray"
+    movie_dir = bluray_root / "Selected (2026)"
+    movie_dir.mkdir(parents=True)
+    orphan = movie_dir / "Selected (2026).nfo"
+    orphan.write_text("metadata", encoding="utf-8")
+    plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
+    plugin._config = {
+        **plugin._default_config(),
+        "bluray_library_paths": bluray_root.as_posix(),
+        "orphan_metadata_categories": [ALL_CATEGORIES_VALUE],
+    }
+    plugin.save_data = lambda _key, _value: None
+    plugin._append_history = lambda _key, _value: None
+
+    result = plugin._scan_and_save(orphan_metadata_only=True)
+    issue_paths = {
+        issue["path"]
+        for issue in (result.get("data") or {}).get("issues") or []
+    }
+
+    assert result["code"] == 0
+    assert orphan.as_posix() in issue_paths
+
+
+def test_bluray_library_is_single_standalone_category(tmp_path: Path) -> None:
+    """蓝光媒体库应显示为单一分类且不识别其子目录。"""
+    mixed_root = tmp_path / "mixed"
+    mixed_category = mixed_root / "电影" / "华语电影"
+    bluray_root = tmp_path / "bluray"
+    (bluray_root / "原盘" / "电影A").mkdir(parents=True)
+    mixed_category.mkdir(parents=True)
+    plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
+    plugin._config = {
+        **plugin._default_config(),
+        "library_paths": mixed_root.as_posix(),
+        "bluray_library_paths": bluray_root.as_posix(),
+        "missing_metadata_categories": [BLURAY_CATEGORY_VALUE],
+    }
+
+    options = plugin._category_options()
+    paths, error = plugin._selected_category_paths(
+        config_key="missing_metadata_categories",
+        scan_label="缺失元数据查询",
+    )
+
+    assert options == [
+        {"title": "全部（全量）", "value": ALL_CATEGORIES_VALUE, "type": "all"},
+        {
+            "title": "电影 / 华语电影",
+            "value": mixed_category.resolve().as_posix(),
+            "type": "movie",
+        },
+        {"title": "蓝光", "value": BLURAY_CATEGORY_VALUE, "type": "movie"},
+    ]
+    assert error is None
+    assert paths == [bluray_root]
+    assert plugin._category_label_from_path(
+        (bluray_root / "原盘" / "电影A" / "电影A.strm").as_posix()
+    ) == "蓝光"
+
+
+def test_bluray_category_is_visible_before_path_is_configured() -> None:
+    """未配置蓝光路径时仍应展示蓝光分类并在扫描前明确提示。"""
+    plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
+    plugin._config = {
+        **plugin._default_config(),
+        "missing_metadata_categories": [BLURAY_CATEGORY_VALUE],
+    }
+
+    options = plugin._category_options()
+    paths, error = plugin._selected_category_paths(
+        config_key="missing_metadata_categories",
+        scan_label="缺失元数据查询",
+    )
+
+    assert options[-1] == {
+        "title": "蓝光",
+        "value": BLURAY_CATEGORY_VALUE,
+        "type": "movie",
+    }
+    assert paths == []
+    assert error == "请先配置蓝光媒体库路径"
+
+
+def test_custom_category_root_name_discovers_tv_categories(tmp_path: Path) -> None:
+    """自定义电视剧文件夹名应参与二级分类识别和类型判断。"""
+    library_root = tmp_path / "media"
+    category_path = library_root / "Series" / "国产剧"
+    episode_path = category_path / "Example" / "Season 1" / "Example.S01E01.strm"
+    episode_path.parent.mkdir(parents=True)
+    plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
+    plugin._config = {
+        **plugin._default_config(),
+        "library_paths": library_root.as_posix(),
+        "tv_category_root_names": "Series\nTV Shows",
+    }
+
+    categories = plugin._discover_secondary_categories()
+    groups = plugin._build_missing_metadata_groups(
+        {
+            "issues": [
+                {"code": "missing_nfo", "path": episode_path.as_posix()},
+            ]
+        }
+    )
+
+    assert categories == [
+        {
+            "title": "Series / 国产剧",
+            "value": category_path.resolve().as_posix(),
+            "type": "tv",
+        }
+    ]
+    assert plugin._category_library_type(episode_path) == "tv"
+    assert groups[0]["category"] == "Series / 国产剧"
+    assert groups[0]["library_type"] == "tv"
+
+
+def test_category_preview_uses_unsaved_page_config(tmp_path: Path) -> None:
+    """分类预览应使用页面提交但尚未保存的路径和文件夹名。"""
+    library_root = tmp_path / "media"
+    category_path = library_root / "Shows" / "华语剧"
+    category_path.mkdir(parents=True)
+    plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
+    plugin._config = plugin._default_config()
+
+    result = plugin.api_preview_categories(
+        config_json=json.dumps(
+            {
+                "library_paths": library_root.as_posix(),
+                "tv_category_root_names": "Shows",
+            }
+        )
+    )
+
+    assert result["code"] == 0
+    assert result["data"][1] == {
+        "title": "Shows / 华语剧",
+        "value": category_path.resolve().as_posix(),
+        "type": "tv",
+    }
+
+
+def test_all_category_removes_other_submitted_categories(tmp_path: Path) -> None:
+    """全部与普通分类同时提交时应只保存全部。"""
+    selected_category = tmp_path / "电影" / "华语电影"
+    selected_category.mkdir(parents=True)
+    plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
+    plugin._config = plugin._default_config()
+    plugin._discover_secondary_categories = lambda: [
+        {
+            "title": "电影 / 华语电影",
+            "value": selected_category.as_posix(),
+            "type": "movie",
+        }
+    ]
+    saved_configs = []
+    plugin.update_config = lambda config: saved_configs.append(config) or True
+
+    error = plugin._update_selected_categories(
+        config_key="orphan_metadata_categories",
+        categories=json.dumps(
+            [selected_category.as_posix(), ALL_CATEGORIES_VALUE]
+        ),
+        scan_label="多余元数据扫描",
+    )
+
+    assert error is None
+    assert saved_configs[-1]["orphan_metadata_categories"] == [
+        ALL_CATEGORIES_VALUE
+    ]
+
+
+def test_orphan_metadata_scan_only_uses_selected_category(tmp_path: Path) -> None:
+    """多余元数据扫描应只检查选中的二级分类。"""
+    library_root = tmp_path / "media"
+    selected_category = library_root / "电影" / "华语电影"
+    excluded_category = library_root / "电影" / "欧美电影"
+    selected_movie = selected_category / "Selected (2026)"
+    excluded_movie = excluded_category / "Excluded (2026)"
+    selected_movie.mkdir(parents=True)
+    excluded_movie.mkdir(parents=True)
+    selected_orphan = selected_movie / "Selected (2026).nfo"
+    excluded_orphan = excluded_movie / "Excluded (2026).nfo"
+    selected_orphan.write_text("metadata", encoding="utf-8")
+    excluded_orphan.write_text("metadata", encoding="utf-8")
+    plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
+    plugin._config = {
+        **plugin._default_config(),
+        "library_paths": library_root.as_posix(),
+        "orphan_metadata_categories": [selected_category.as_posix()],
+    }
+    plugin.save_data = lambda _key, _value: None
+    plugin._append_history = lambda _key, _value: None
+
+    result = plugin._scan_and_save(orphan_metadata_only=True)
+    issue_paths = {
+        issue["path"]
+        for issue in (result.get("data") or {}).get("issues") or []
+    }
+
+    assert result["code"] == 0
+    assert selected_orphan.as_posix() in issue_paths
+    assert excluded_orphan.as_posix() not in issue_paths
+
+
+def test_batch_delete_verifies_same_parent_once(tmp_path: Path) -> None:
+    """同目录批量删除应合并父目录复核。"""
+    first = tmp_path / "Episode S01E01.strm"
+    second = tmp_path / "Episode S01E01.nfo"
+    first.write_text("/CloudNAS/CloudDrive/Episode S01E01.mkv", encoding="utf-8")
+    second.write_text("metadata", encoding="utf-8")
+
+    class _StorageChainStub:
+        """记录本地删除和目录列举次数。"""
+
+        def __init__(self) -> None:
+            self.list_count = 0
+
+        @staticmethod
+        def get_file_item(
+            storage: str,
+            path: Path,
+        ) -> Optional[SimpleNamespace]:
+            """按当前文件系统状态返回简化文件项。"""
+            if not path.exists():
+                return None
+            return SimpleNamespace(
+                storage=storage,
+                type="file" if path.is_file() else "dir",
+                path=path.as_posix(),
+            )
+
+        @staticmethod
+        def delete_file(file_item: SimpleNamespace) -> bool:
+            """删除简化文件项。"""
+            Path(file_item.path).unlink()
+            return True
+
+        def list_files(self, file_item: SimpleNamespace) -> List[SimpleNamespace]:
+            """列举目录并记录调用次数。"""
+            self.list_count += 1
+            return [
+                SimpleNamespace(path=path.as_posix())
+                for path in Path(file_item.path).iterdir()
+            ]
+
+    plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
+    storage_chain = _StorageChainStub()
+
+    results = plugin._delete_paths_and_verify([first, second], storage_chain)
+
+    assert storage_chain.list_count == 1
+    assert all(result["verified"] for result in results)
+    assert not first.exists()
+    assert not second.exists()
+
+
+def test_delete_all_orphan_metadata_requires_confirmation_and_updates_plan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """一键删除应要求确认，并在批量复核后更新扫描结果。"""
+    first = tmp_path / "Movie.nfo"
+    second = tmp_path / "Movie-thumb.jpg"
+    first.write_text("metadata", encoding="utf-8")
+    second.write_text("image", encoding="utf-8")
+    data_store = {
+        "latest_orphan_plan": {
+            "issues": [
+                {"code": "orphan_sidecar", "path": first.as_posix()},
+                {"code": "orphan_sidecar", "path": second.as_posix()},
+            ],
+            "summary": {"issue_count": 2},
+        }
+    }
+
+    class _StorageChainStub:
+        """使用临时目录模拟MP本地存储链。"""
+
+        @staticmethod
+        def get_file_item(storage: str, path: Path) -> Optional[SimpleNamespace]:
+            """按临时文件系统状态返回文件项。"""
+            if not path.exists():
+                return None
+            return SimpleNamespace(
+                storage=storage,
+                type="file" if path.is_file() else "dir",
+                path=path.as_posix(),
+            )
+
+        @staticmethod
+        def delete_file(file_item: SimpleNamespace) -> bool:
+            """删除临时文件。"""
+            Path(file_item.path).unlink()
+            return True
+
+        @staticmethod
+        def list_files(file_item: SimpleNamespace) -> List[SimpleNamespace]:
+            """列举临时父目录。"""
+            return [
+                SimpleNamespace(path=path.as_posix())
+                for path in Path(file_item.path).iterdir()
+            ]
+
+    plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
+    plugin._config = {
+        **plugin._default_config(),
+        "library_paths": tmp_path.as_posix(),
+    }
+    plugin.get_data = lambda key: data_store.get(key)
+    plugin.save_data = lambda key, value: data_store.__setitem__(key, value)
+    plugin._append_history = lambda _key, _value: None
+    monkeypatch.setattr(plugin_module, "StorageChain", _StorageChainStub)
+
+    rejected = plugin.api_delete_all_orphan_metadata()
+    result = plugin.api_delete_all_orphan_metadata(confirmed=True)
+
+    assert rejected["code"] == 1
+    assert result["code"] == 0
+    assert result["data"]["total_count"] == 2
+    assert result["data"]["deleted_count"] == 2
+    assert result["data"]["failed_count"] == 0
+    assert data_store["latest_orphan_plan"]["issues"] == []
+    assert not first.exists()
+    assert not second.exists()
+
+
+def test_delete_selected_orphan_metadata_only_uses_requested_paths(
+    tmp_path: Path,
+) -> None:
+    """多选删除应只处理当前结果中明确勾选的路径。"""
+    first = tmp_path / "Movie.nfo"
+    second = tmp_path / "Movie-thumb.jpg"
+    plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
+    plugin.get_data = lambda _key: {
+        "issues": [
+            {"code": "orphan_sidecar", "path": first.as_posix()},
+            {"code": "orphan_sidecar", "path": second.as_posix()},
+        ]
+    }
+    selected = []
+    plugin._delete_orphan_metadata_paths = (
+        lambda paths: selected.extend(paths) or {"code": 0, "msg": "完成"}
+    )
+
+    result = plugin.api_delete_orphan_metadata_batch(
+        paths=json.dumps([second.as_posix()]),
+        confirmed=True,
+    )
+
+    assert result["code"] == 0
+    assert selected == [second.as_posix()]
+
+
+def test_absent_cloud_file_requires_accessible_parent(tmp_path: Path) -> None:
+    """CD2目标原本不存在时必须成功列举父目录。"""
+    missing_file = tmp_path / "offline" / "Movie.mkv"
+
+    class _UnavailableStorageChainStub:
+        """模拟CD2目标和父目录均不可访问。"""
+
+        @staticmethod
+        def get_file_item(storage: str, path: Path) -> None:
+            """始终返回路径不可访问。"""
+            return None
+
+        @staticmethod
+        def delete_file(file_item: SimpleNamespace) -> bool:
+            """记录不应被调用的删除接口。"""
+            raise AssertionError("目标不存在时不应调用删除")
+
+        @staticmethod
+        def list_files(file_item: SimpleNamespace) -> List[SimpleNamespace]:
+            """记录不应在父目录缺失时调用的列举接口。"""
+            raise AssertionError("父目录不存在时不应调用列举")
+
+    plugin = EmbyLibraryOrganizer.__new__(EmbyLibraryOrganizer)
+    results = plugin._delete_paths_and_verify(
+        [missing_file],
+        _UnavailableStorageChainStub(),
+        verify_absent_parent=True,
+    )
+
+    assert results[0]["verified"] is False
+    assert results[0]["status"] == "failed"
 
 
 def test_absolute_media_path_is_valid_strm_identity() -> None:

@@ -1,14 +1,17 @@
 import hashlib
+import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from time import sleep
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote
 
 from apscheduler.triggers.cron import CronTrigger
 
 from app.chain.storage import StorageChain
 from app.db.mediaserver_oper import MediaServerOper
+from app.helper.thread import ThreadHelper
 from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas import MediaType, NotificationType
@@ -39,12 +42,8 @@ from .core import (
 )
 
 
-SECONDARY_CATEGORY_ROOT_TYPES = {
-    "电影": "movie",
-    "电视剧": "tv",
-    "剧集": "tv",
-    "动漫": "anime",
-}
+ALL_CATEGORIES_VALUE = "__all__"
+BLURAY_CATEGORY_VALUE = "__bluray__"
 SXXEXX_EPISODE_PATTERN = re.compile(r"(?i)(S\d{1,2}E)(\d{1,3})")
 CHINESE_EPISODE_PATTERN = re.compile(r"第(\d{1,3})(集|话)")
 
@@ -55,6 +54,7 @@ class EmbyLibraryOrganizer(_PluginBase):
     _MAX_VISIBLE_METADATA_FILES = 200
     _OVERVIEW_SAMPLE_SIZE = 5
     _DETAIL_PAGE_SIZE = 20
+    _DELETE_VERIFY_DELAYS = (0.0, 0.4, 1.0)
 
     plugin_name = "Emby媒体库整理"
     plugin_desc = (
@@ -65,7 +65,7 @@ class EmbyLibraryOrganizer(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/MoviePilot-Frontend/"
         "refs/heads/v2/src/assets/images/misc/emby.png"
     )
-    plugin_version = "1.0.3"
+    plugin_version = "1.2.1"
     plugin_label = "媒体库整理"
     plugin_author = "zhaojg"
     plugin_config_prefix = "embylibraryorganizer_"
@@ -77,6 +77,12 @@ class EmbyLibraryOrganizer(_PluginBase):
     _latest_plan: Optional[OrganizerPlan] = None
     _task_status = "idle"
     _last_error = ""
+    _scan_future = None
+    _scan_kind = ""
+    _scan_started_at = ""
+    _scan_finished_at = ""
+    _task_message = ""
+    _ui_result_cache: Dict[str, Dict[str, Any]] = {}
 
     def init_plugin(self, config: dict = None) -> None:
         """根据插件配置初始化运行状态。"""
@@ -84,6 +90,7 @@ class EmbyLibraryOrganizer(_PluginBase):
         self._config = self._merge_defaults(config or {})
         self._enabled = bool(self._config.get("enabled", False))
         self._latest_plan = self._load_latest_plan()
+        self._ui_result_cache = {}
 
     def get_state(self) -> bool:
         """获取插件启用状态。"""
@@ -128,6 +135,54 @@ class EmbyLibraryOrganizer(_PluginBase):
                 "auth": "bear",
                 "summary": "获取媒体库二级分类",
                 "description": "返回从已配置媒体库路径识别出的二级分类。",
+            },
+            {
+                "path": "/categories/preview",
+                "endpoint": self.api_preview_categories,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "按页面配置预览媒体库分类",
+                "description": "根据页面尚未保存的媒体库路径和识别文件夹名返回二级分类。",
+            },
+            {
+                "path": "/ui_state",
+                "endpoint": self.api_ui_state,
+                "methods": ["GET"],
+                "auth": "bear",
+                "summary": "获取插件管理页面数据",
+                "description": "返回扫描状态、分类以及分页后的多余和缺失元数据结果。",
+            },
+            {
+                "path": "/delete_preview",
+                "endpoint": self.api_delete_preview,
+                "methods": ["GET"],
+                "auth": "bear",
+                "summary": "预览直接删除目标",
+                "description": "返回STRM、本地联动文件和CD2挂载文件的删除清单。",
+            },
+            {
+                "path": "/delete_orphan_metadata",
+                "endpoint": self.api_delete_orphan_metadata,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "删除多余元数据文件",
+                "description": "直接删除指定多余元数据并通过父目录复核结果。",
+            },
+            {
+                "path": "/delete_all_orphan_metadata",
+                "endpoint": self.api_delete_all_orphan_metadata,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "批量删除全部多余元数据文件",
+                "description": "删除当前扫描结果中的全部多余元数据并按父目录批量复核。",
+            },
+            {
+                "path": "/delete_orphan_metadata_batch",
+                "endpoint": self.api_delete_orphan_metadata_batch,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "批量删除选中的多余元数据文件",
+                "description": "删除当前扫描结果中选定的多余元数据并按父目录批量复核。",
             },
             {
                 "path": "/view",
@@ -341,10 +396,19 @@ class EmbyLibraryOrganizer(_PluginBase):
 
     def get_form(self) -> Tuple[Optional[List[dict]], Dict[str, Any]]:
         """返回插件配置表单与默认配置。"""
-        return self._form_schema(), self._default_config()
+        return None, self._default_config()
+
+    @staticmethod
+    def get_render_mode() -> Tuple[str, Optional[str]]:
+        """返回插件Vue联邦组件渲染模式。"""
+        return "vue", "dist/assets"
 
     def get_page(self) -> Optional[List[dict]]:
-        """返回插件详情页面。"""
+        """Vue模式下不生成后端页面结构。"""
+        return None
+
+    def _legacy_page(self) -> Optional[List[dict]]:
+        """保留旧页面结构供历史数据兼容。"""
         page_state = self.get_data("page_state") or {}
         if page_state.get("mode") == "missing_metadata":
             return self._missing_metadata_detail_page(
@@ -586,23 +650,286 @@ class EmbyLibraryOrganizer(_PluginBase):
 
     def api_scan(self) -> Dict[str, Any]:
         """扫描媒体库并生成整理计划。"""
-        return self.scan_once()
+        return self._start_scan_task()
 
-    def api_scan_orphan_metadata(self) -> Dict[str, Any]:
+    def api_scan_orphan_metadata(
+        self,
+        categories: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """仅扫描多余元数据并生成清理计划。"""
-        return self._scan_and_save(orphan_metadata_only=True)
+        category_error = self._update_selected_categories(
+            config_key="orphan_metadata_categories",
+            categories=categories,
+            scan_label="多余元数据扫描",
+        )
+        if category_error:
+            return {"code": 1, "msg": category_error}
+        return self._start_scan_task(orphan_metadata_only=True)
 
-    def api_scan_missing_metadata(self) -> Dict[str, Any]:
+    def api_scan_missing_metadata(
+        self,
+        categories: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """查询所选二级分类中缺失元数据的STRM。"""
-        return self._scan_and_save(missing_metadata_only=True)
+        category_error = self._update_selected_categories(
+            config_key="missing_metadata_categories",
+            categories=categories,
+            scan_label="缺失元数据查询",
+        )
+        if category_error:
+            return {"code": 1, "msg": category_error}
+        return self._start_scan_task(missing_metadata_only=True)
 
     def api_get_categories(self) -> Dict[str, Any]:
         """返回自动识别的媒体库二级分类。"""
         return {
             "code": 0,
             "msg": "",
-            "data": self._discover_secondary_categories(),
+            "data": self._category_options(),
         }
+
+    def api_preview_categories(self, config_json: str) -> Dict[str, Any]:
+        """按页面提交的媒体库路径和文件夹名称预览二级分类。"""
+        try:
+            preview_config = json.loads(config_json)
+        except (TypeError, json.JSONDecodeError):
+            return {"code": 1, "msg": "媒体库配置参数格式无效"}
+        if not isinstance(preview_config, dict):
+            return {"code": 1, "msg": "媒体库配置参数格式无效"}
+        return {
+            "code": 0,
+            "msg": "",
+            "data": self._category_options(self._merge_defaults(preview_config)),
+        }
+
+    def api_ui_state(
+        self,
+        missing_page: int = 1,
+        orphan_page: int = 1,
+        page_size: int = 20,
+    ) -> Dict[str, Any]:
+        """返回Vue管理页面所需的扫描状态和分页结果。"""
+        page_size = min(max(int(page_size or 20), 10), 100)
+        missing_groups = self._cached_ui_items(
+            "latest_missing_plan",
+            self._build_missing_metadata_groups,
+        )
+        orphan_items = self._cached_ui_items(
+            "latest_orphan_plan",
+            self._orphan_ui_items,
+        )
+        missing_page_data = self._paginate_items(
+            missing_groups,
+            page=missing_page,
+            page_size=page_size,
+        )
+        orphan_page_data = self._paginate_items(
+            orphan_items,
+            page=orphan_page,
+            page_size=page_size,
+        )
+        return {
+            "code": 0,
+            "msg": "",
+            "data": {
+                "enabled": self._enabled,
+                "status": self._task_status,
+                "scan_running": self._task_status in ("queued", "scanning"),
+                "scan_kind": self._scan_kind,
+                "scan_started_at": self._scan_started_at,
+                "scan_finished_at": self._scan_finished_at,
+                "task_message": self._task_message,
+                "last_error": self._last_error,
+                "categories": self._category_options(),
+                "selected_categories": (
+                    self._config.get("missing_metadata_categories") or []
+                ),
+                "selected_missing_categories": (
+                    self._config.get("missing_metadata_categories") or []
+                ),
+                "selected_orphan_categories": (
+                    self._config.get("orphan_metadata_categories") or []
+                ),
+                "missing": missing_page_data,
+                "orphan": orphan_page_data,
+                "last_delete": self.get_data("last_direct_delete") or {},
+            },
+        }
+
+    def api_delete_preview(
+        self,
+        path: str,
+        include_sidecars: bool = False,
+        include_cloud: bool = False,
+        episode_group: bool = False,
+    ) -> Dict[str, Any]:
+        """返回指定STRM直接删除前的精确目标清单。"""
+        strm_paths, error = self._resolve_delete_strm_paths(path, episode_group)
+        if error:
+            return {"code": 1, "msg": error}
+        local_paths: List[Path] = []
+        cloud_paths: List[Path] = []
+        for strm_path in strm_paths:
+            local_paths.append(strm_path)
+            if include_sidecars:
+                local_paths.extend(owned_sidecar_paths(strm_path))
+            if include_cloud:
+                cloud_path, cloud_error = self._cd2_path_from_strm(strm_path)
+                if cloud_error:
+                    return {"code": 1, "msg": cloud_error}
+                cloud_paths.append(cloud_path)
+        local_paths = list(dict.fromkeys(local_paths))
+        cloud_paths = list(dict.fromkeys(cloud_paths))
+        return {
+            "code": 0,
+            "msg": "删除目标已确认",
+            "data": {
+                "strm_count": len(strm_paths),
+                "local_count": len(local_paths),
+                "cloud_count": len(cloud_paths),
+                "local_files": [item.name for item in local_paths],
+                "cloud_files": [item.name for item in cloud_paths],
+            },
+        }
+
+    def api_delete_orphan_metadata(self, path: str) -> Dict[str, Any]:
+        """直接删除多余元数据文件并通过父目录复核。"""
+        orphan_plan = self.get_data("latest_orphan_plan") or {}
+        candidate_paths = {
+            str(issue.get("path") or "")
+            for issue in orphan_plan.get("issues") or []
+            if issue.get("code") == "orphan_sidecar"
+        }
+        if path not in candidate_paths:
+            return {"code": 1, "msg": "该文件不在当前多余元数据结果中"}
+        target = Path(path).expanduser()
+        if not self._is_managed_local_file(target):
+            return {"code": 1, "msg": "文件不存在或不在已配置媒体库内"}
+        result = self._delete_path_and_verify(target)
+        verified = bool(result.get("verified"))
+        if verified:
+            self._remove_plan_issues("latest_orphan_plan", {target.as_posix()})
+        response = {
+            "code": 0 if verified else 1,
+            "msg": "文件已删除并通过目录复核" if verified else result.get("message"),
+            "data": {"local_results": [result], "verified": verified},
+        }
+        self._save_direct_delete_result(response)
+        return response
+
+    def api_delete_all_orphan_metadata(
+        self,
+        confirmed: bool = False,
+    ) -> Dict[str, Any]:
+        """批量删除当前扫描结果中的全部多余元数据并复核。"""
+        if not confirmed:
+            return {"code": 1, "msg": "请先确认批量删除操作"}
+        orphan_plan = self.get_data("latest_orphan_plan") or {}
+        candidate_paths = list(
+            dict.fromkeys(
+                str(issue.get("path") or "")
+                for issue in orphan_plan.get("issues") or []
+                if issue.get("code") == "orphan_sidecar"
+                and str(issue.get("path") or "")
+            )
+        )
+        if not candidate_paths:
+            return {"code": 1, "msg": "当前没有可删除的多余元数据"}
+        return self._delete_orphan_metadata_paths(candidate_paths)
+
+    def api_delete_orphan_metadata_batch(
+        self,
+        paths: str,
+        confirmed: bool = False,
+    ) -> Dict[str, Any]:
+        """批量删除当前扫描结果中选中的多余元数据并复核。"""
+        if not confirmed:
+            return {"code": 1, "msg": "请先确认批量删除操作"}
+        try:
+            selected_paths = json.loads(paths)
+        except (TypeError, json.JSONDecodeError):
+            return {"code": 1, "msg": "所选文件参数格式无效"}
+        if not isinstance(selected_paths, list):
+            return {"code": 1, "msg": "所选文件参数格式无效"}
+        selected_paths = list(
+            dict.fromkeys(
+                value.strip()
+                for value in selected_paths
+                if isinstance(value, str) and value.strip()
+            )
+        )
+        if not selected_paths:
+            return {"code": 1, "msg": "请至少选择一个多余元数据文件"}
+        orphan_plan = self.get_data("latest_orphan_plan") or {}
+        candidate_paths = {
+            str(issue.get("path") or "")
+            for issue in orphan_plan.get("issues") or []
+            if issue.get("code") == "orphan_sidecar"
+        }
+        if any(path not in candidate_paths for path in selected_paths):
+            return {"code": 1, "msg": "所选文件已不在当前多余元数据结果中"}
+        return self._delete_orphan_metadata_paths(selected_paths)
+
+    def _delete_orphan_metadata_paths(
+        self,
+        candidate_paths: List[str],
+    ) -> Dict[str, Any]:
+        """删除并复核指定的多余元数据路径。"""
+        targets = [Path(path).expanduser() for path in candidate_paths]
+        invalid_targets = [
+            target
+            for target in targets
+            if not self._is_managed_local_path(target)
+        ]
+        if invalid_targets:
+            return {
+                "code": 1,
+                "msg": "所选结果包含无效或越界路径，已停止删除",
+                "data": {
+                    "verified": False,
+                    "total_count": len(targets),
+                    "deleted_count": 0,
+                    "failed_count": len(invalid_targets),
+                    "local_results": [
+                        {
+                            "path": target.as_posix(),
+                            "name": target.name,
+                            "status": "rejected",
+                            "verified": False,
+                            "message": "路径无效、越界或为符号链接",
+                        }
+                        for target in invalid_targets
+                    ],
+                },
+            }
+        results = self._delete_paths_and_verify(targets, StorageChain())
+        verified_paths = {
+            str(result.get("path") or "")
+            for result in results
+            if result.get("verified")
+        }
+        if verified_paths:
+            self._remove_plan_issues("latest_orphan_plan", verified_paths)
+        deleted_count = len(verified_paths)
+        failed_count = len(results) - deleted_count
+        verified = failed_count == 0
+        response = {
+            "code": 0 if verified else 1,
+            "msg": (
+                f"已删除并复核{deleted_count}个多余元数据文件"
+                if verified
+                else f"已完成{deleted_count}个，{failed_count}个删除或复核失败"
+            ),
+            "data": {
+                "verified": verified,
+                "total_count": len(results),
+                "deleted_count": deleted_count,
+                "failed_count": failed_count,
+                "local_results": results,
+            },
+        }
+        self._save_direct_delete_result(response)
+        return response
 
     def api_set_page_view(
         self,
@@ -620,87 +947,32 @@ class EmbyLibraryOrganizer(_PluginBase):
         self,
         path: str,
         include_sidecars: bool = False,
+        include_cloud: bool = False,
     ) -> Dict[str, Any]:
-        """清理缺失元数据查询结果中的指定STRM及可选联动文件。"""
-        missing_plan = self.get_data("latest_missing_plan") or {}
-        candidate_paths = {
-            str(issue.get("path") or "")
-            for issue in missing_plan.get("issues") or []
-            if issue.get("code") in ("missing_nfo", "missing_mediainfo")
-        }
-        if path not in candidate_paths:
-            return {"code": 1, "msg": "该STRM不在当前缺失元数据查询结果中"}
-        strm_path = Path(path).expanduser()
-        if (
-            strm_path.is_symlink()
-            or not strm_path.is_file()
-            or strm_path.suffix.lower() != STRM_SUFFIX
-        ):
-            return {"code": 1, "msg": "STRM文件不存在或类型无效，请重新查询"}
-        organizer_config = config_from_dict(self._config)
-        resolved_path = strm_path.resolve()
-        if not any(
-            self._path_is_within(resolved_path, root.expanduser().resolve())
-            for root in organizer_config.library_paths
-        ):
-            return {"code": 1, "msg": "STRM路径不在已配置媒体库内"}
-        cleanup_paths = [resolved_path]
-        if include_sidecars:
-            cleanup_paths.extend(owned_sidecar_paths(resolved_path))
-        return self._execute_manual_cleanup(
-            cleanup_paths=cleanup_paths,
-            organizer_config=organizer_config,
-            strm_count=1,
+        """直接删除缺失结果中的STRM、联动文件和可选CD2源文件。"""
+        strm_paths, error = self._resolve_delete_strm_paths(path, episode_group=False)
+        if error:
+            return {"code": 1, "msg": error}
+        return self._execute_direct_delete(
+            strm_paths=strm_paths,
+            include_sidecars=include_sidecars,
+            include_cloud=include_cloud,
         )
 
-    def api_delete_episode_group(self, path: str) -> Dict[str, Any]:
-        """清理电视剧季目录中仅集号不同的同格式STRM及联动文件。"""
-        missing_plan = self.get_data("latest_missing_plan") or {}
-        candidate_paths = {
-            str(issue.get("path") or "")
-            for issue in missing_plan.get("issues") or []
-            if issue.get("code") in ("missing_nfo", "missing_mediainfo")
-        }
-        if path not in candidate_paths:
-            return {"code": 1, "msg": "该STRM不在当前缺失元数据查询结果中"}
-        strm_path = Path(path).expanduser()
-        if strm_path.is_symlink() or not strm_path.is_file():
-            return {"code": 1, "msg": "STRM文件不存在，请重新查询"}
-        resolved_path = strm_path.resolve()
-        if (
-            self._category_library_type(resolved_path) != "tv"
-            or not resolved_path.parent.name.casefold().startswith("season ")
-        ):
-            return {"code": 1, "msg": "同格式整组清理仅支持电视剧季目录"}
-        template = self._episode_name_template(resolved_path.stem)
-        if not template:
-            return {"code": 1, "msg": "文件名未识别到SxxExx或第X集格式"}
-        matched_strm_paths = sorted(
-            candidate.resolve()
-            for candidate in resolved_path.parent.iterdir()
-            if not candidate.is_symlink()
-            and candidate.is_file()
-            and candidate.suffix.lower() == STRM_SUFFIX
-            and self._episode_name_template(candidate.stem) == template
-        )
-        organizer_config = config_from_dict(self._config)
-        if len(matched_strm_paths) > organizer_config.max_delete_count:
-            return {
-                "code": 1,
-                "msg": (
-                    f"同格式匹配到{len(matched_strm_paths)}个STRM，超过单次最大删除数量"
-                    f"{organizer_config.max_delete_count}"
-                ),
-            }
-        cleanup_paths: List[Path] = []
-        for matched_path in matched_strm_paths:
-            cleanup_paths.append(matched_path)
-            cleanup_paths.extend(owned_sidecar_paths(matched_path))
-        cleanup_paths = list(dict.fromkeys(cleanup_paths))
-        return self._execute_manual_cleanup(
-            cleanup_paths=cleanup_paths,
-            organizer_config=organizer_config,
-            strm_count=len(matched_strm_paths),
+    def api_delete_episode_group(
+        self,
+        path: str,
+        include_sidecars: bool = True,
+        include_cloud: bool = False,
+    ) -> Dict[str, Any]:
+        """直接删除同一季目录中仅集号不同的STRM整组。"""
+        strm_paths, error = self._resolve_delete_strm_paths(path, episode_group=True)
+        if error:
+            return {"code": 1, "msg": error}
+        return self._execute_direct_delete(
+            strm_paths=strm_paths,
+            include_sidecars=include_sidecars,
+            include_cloud=include_cloud,
         )
 
     def api_validate(self) -> Dict[str, Any]:
@@ -837,8 +1109,14 @@ class EmbyLibraryOrganizer(_PluginBase):
             "data": {
                 "enabled": self._enabled,
                 "status": self._task_status,
+                "scan_running": self._task_status in ("queued", "scanning"),
+                "scan_kind": self._scan_kind,
+                "scan_started_at": self._scan_started_at,
+                "scan_finished_at": self._scan_finished_at,
+                "task_message": self._task_message,
                 "last_error": self._last_error,
                 "latest_summary": latest_summary,
+                "last_delete": self.get_data("last_direct_delete") or {},
             },
         }
 
@@ -1355,28 +1633,113 @@ class EmbyLibraryOrganizer(_PluginBase):
         """执行一次媒体库扫描并保存计划。"""
         return self._scan_and_save(orphan_metadata_only=False)
 
+    def _start_scan_task(
+        self,
+        orphan_metadata_only: bool = False,
+        missing_metadata_only: bool = False,
+    ) -> Dict[str, Any]:
+        """提交后台扫描任务，并立即返回当前任务状态。"""
+        if self._scan_future and not self._scan_future.done():
+            return {
+                "code": 1,
+                "msg": self._task_message or "已有扫描任务正在执行，请稍候",
+                "data": {"status": self._task_status},
+            }
+        if missing_metadata_only:
+            scan_kind = "missing"
+            task_message = "缺失元数据查询已排队"
+        elif orphan_metadata_only:
+            scan_kind = "orphan"
+            task_message = "多余元数据扫描已排队"
+        else:
+            scan_kind = "full"
+            task_message = "全量扫描已排队"
+        self._task_status = "queued"
+        self._scan_kind = scan_kind
+        self._scan_started_at = ""
+        self._scan_finished_at = ""
+        self._task_message = task_message
+        self._last_error = ""
+        try:
+            self._scan_future = ThreadHelper().submit(
+                self._scan_and_save,
+                orphan_metadata_only=orphan_metadata_only,
+                missing_metadata_only=missing_metadata_only,
+            )
+        except Exception as err:
+            self._task_status = "failed"
+            self._scan_finished_at = datetime.now().isoformat(timespec="seconds")
+            self._last_error = str(err)
+            self._task_message = "扫描任务提交失败"
+            logger.error(
+                f"【{self.plugin_name}】扫描任务提交失败：{str(err)}",
+                exc_info=True,
+            )
+            return {"code": 1, "msg": f"扫描任务提交失败：{str(err)}"}
+        logger.info(f"【{self.plugin_name}】{task_message}")
+        return {
+            "code": 0,
+            "msg": task_message,
+            "data": {"status": self._task_status, "scan_kind": scan_kind},
+        }
+
     def _scan_and_save(
         self,
         orphan_metadata_only: bool = False,
         missing_metadata_only: bool = False,
     ) -> Dict[str, Any]:
         """按指定范围扫描媒体库并保存计划。"""
+        if missing_metadata_only:
+            self._scan_kind = "missing"
+            scan_label = "缺失元数据查询"
+        elif orphan_metadata_only:
+            self._scan_kind = "orphan"
+            scan_label = "多余元数据扫描"
+        else:
+            self._scan_kind = "full"
+            scan_label = "全量扫描"
         self._task_status = "scanning"
+        self._scan_started_at = datetime.now().isoformat(timespec="seconds")
+        self._scan_finished_at = ""
+        self._task_message = f"{scan_label}正在执行"
         self._last_error = ""
+        logger.info(f"【{self.plugin_name}】{scan_label}开始")
         try:
             organizer_config = config_from_dict(self._config)
-            if missing_metadata_only:
-                category_paths, category_error = self._selected_category_paths()
+            if missing_metadata_only or orphan_metadata_only:
+                category_config_key = (
+                    "missing_metadata_categories"
+                    if missing_metadata_only
+                    else "orphan_metadata_categories"
+                )
+                category_paths, category_error = self._selected_category_paths(
+                    config_key=category_config_key,
+                    scan_label=scan_label,
+                )
                 if category_error:
                     self._task_status = "failed"
+                    self._scan_finished_at = datetime.now().isoformat(timespec="seconds")
                     self._last_error = category_error
-                    logger.warning(f"【{self.plugin_name}】缺失元数据查询未启动：{category_error}")
+                    self._task_message = f"{scan_label}未启动"
+                    logger.warning(
+                        f"【{self.plugin_name}】{scan_label}未启动：{category_error}"
+                    )
                     return {"code": 1, "msg": category_error}
                 organizer_config.library_paths = category_paths
-                organizer_config.library_types = {
-                    path.as_posix(): self._category_library_type(path)
-                    for path in category_paths
-                }
+                selected_categories = self._config.get(category_config_key) or []
+                if ALL_CATEGORIES_VALUE in selected_categories:
+                    organizer_config.library_types = {
+                        path.as_posix(): organizer_config.library_types.get(
+                            path.as_posix(),
+                            "mixed",
+                        )
+                        for path in category_paths
+                    }
+                else:
+                    organizer_config.library_types = {
+                        path.as_posix(): self._category_library_type(path)
+                        for path in category_paths
+                    }
                 organizer_config.clean_trash_files = False
                 organizer_config.delete_duplicate_strm = False
                 organizer_config.delete_sidecar_files = False
@@ -1398,7 +1761,9 @@ class EmbyLibraryOrganizer(_PluginBase):
             ]
             if errors:
                 self._task_status = "failed"
+                self._scan_finished_at = datetime.now().isoformat(timespec="seconds")
                 self._last_error = errors[0].message
+                self._task_message = f"{scan_label}未启动"
                 logger.warning(
                     f"【{self.plugin_name}】扫描未启动，配置校验失败："
                     f"{errors[0].message}"
@@ -1423,61 +1788,160 @@ class EmbyLibraryOrganizer(_PluginBase):
                 self.save_data("latest_orphan_plan", data)
             self._append_history("scan_history", data)
             self._task_status = "idle"
+            self._scan_finished_at = datetime.now().isoformat(timespec="seconds")
+            issue_count = len(data.get("issues") or [])
+            self._task_message = f"{scan_label}完成，发现{issue_count}项结果"
+            logger.info(f"【{self.plugin_name}】{self._task_message}")
             return {
                 "code": 0,
-                "msg": "扫描完成",
+                "msg": self._task_message,
                 "data": data,
             }
         except Exception as err:
             self._task_status = "failed"
+            self._scan_finished_at = datetime.now().isoformat(timespec="seconds")
             self._last_error = str(err)
-            logger.error(f"【{self.plugin_name}】扫描失败：{str(err)}")
+            self._task_message = f"{scan_label}失败"
+            logger.error(
+                f"【{self.plugin_name}】{scan_label}失败：{str(err)}",
+                exc_info=True,
+            )
             return {"code": 1, "msg": f"扫描失败：{str(err)}"}
 
-    def _selected_category_paths(self) -> Tuple[List[Path], Optional[str]]:
-        """返回配置中选定且仍然有效的二级分类路径。"""
-        selected = self._config.get("missing_metadata_categories") or []
+    def _selected_category_paths(
+        self,
+        config_key: str,
+        scan_label: str,
+    ) -> Tuple[List[Path], Optional[str]]:
+        """返回指定专项扫描中选定且仍然有效的二级分类路径。"""
+        selected = self._config.get(config_key) or []
         if isinstance(selected, str):
             selected = [line.strip() for line in selected.splitlines() if line.strip()]
+        if ALL_CATEGORIES_VALUE in selected:
+            library_paths = config_from_dict(self._config).library_paths
+            if not library_paths:
+                return [], "请先配置至少一个媒体库路径"
+            return library_paths, None
         available = {
             item["value"]: item
-            for item in self._discover_secondary_categories()
+            for item in self._category_options()
         }
-        selected_paths = [
-            Path(value)
-            for value in selected
-            if str(value) in available
-        ]
+        selected_paths: List[Path] = []
+        for value in selected:
+            if str(value) not in available:
+                continue
+            if value == BLURAY_CATEGORY_VALUE:
+                bluray_paths = self._configured_paths(
+                    self._config,
+                    "bluray_library_paths",
+                )
+                if not bluray_paths:
+                    return [], "请先配置蓝光媒体库路径"
+                selected_paths.extend(bluray_paths)
+            else:
+                selected_paths.append(Path(value))
+        selected_paths = list(dict.fromkeys(selected_paths))
         if not selected_paths:
-            return [], "请先在插件配置中选择至少一个二级分类"
+            return [], f"请先在插件设置中选择至少一个{scan_label}分类"
         return selected_paths, None
 
-    def _discover_secondary_categories(self) -> List[Dict[str, str]]:
-        """从配置的媒体库根目录识别电影、电视剧和动漫二级分类。"""
-        organizer_config = config_from_dict(self._config)
+    def _update_selected_categories(
+        self,
+        config_key: str,
+        categories: Optional[str],
+        scan_label: str,
+    ) -> Optional[str]:
+        """校验并保存管理页随扫描请求提交的二级分类。"""
+        if categories is None:
+            return None
+        try:
+            selected = json.loads(categories)
+        except (TypeError, json.JSONDecodeError):
+            return "分类参数格式无效，请刷新页面后重试"
+        if not isinstance(selected, list):
+            return "分类参数格式无效，请刷新页面后重试"
+        selected = list(
+            dict.fromkeys(
+                value.strip()
+                for value in selected
+                if isinstance(value, str) and value.strip()
+            )
+        )
+        if not selected:
+            return f"请至少选择一个{scan_label}分类"
+        if ALL_CATEGORIES_VALUE in selected:
+            selected = [ALL_CATEGORIES_VALUE]
+        available_values = {
+            item["value"]
+            for item in self._category_options()
+        }
+        if any(value not in available_values for value in selected):
+            return "所选分类已失效，请刷新分类后重新选择"
+        self._config[config_key] = selected
+        try:
+            saved = self.update_config(dict(self._config))
+            if saved is False:
+                logger.warning(
+                    f"【{self.plugin_name}】{scan_label}分类持久化失败，"
+                    "本次仍按页面选择继续扫描"
+                )
+        except Exception as err:
+            logger.warning(
+                f"【{self.plugin_name}】{scan_label}分类持久化异常，"
+                f"本次仍按页面选择继续扫描：{str(err)}"
+            )
+        return None
+
+    def _category_options(
+        self,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, str]]:
+        """返回包含全量入口的专项扫描分类选项。"""
+        categories = (
+            self._discover_secondary_categories()
+            if config is None
+            else self._discover_secondary_categories(config)
+        )
+        return [
+            {
+                "title": "全部（全量）",
+                "value": ALL_CATEGORIES_VALUE,
+                "type": "all",
+            },
+            *categories,
+            {
+                "title": "蓝光",
+                "value": BLURAY_CATEGORY_VALUE,
+                "type": "movie",
+            },
+        ]
+
+    def _discover_secondary_categories(
+        self,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, str]]:
+        """按配置的媒体库路径和文件夹名称识别二级分类。"""
+        effective_config = config or self._config
+        category_root_types = self._category_root_types(effective_config)
         categories: Dict[str, Dict[str, str]] = {}
-        for library_root in organizer_config.library_paths:
+        for library_root in self._configured_paths(effective_config, "library_paths"):
             root = library_root.expanduser().resolve()
             if not root.is_dir():
                 continue
-            library_type = organizer_config.library_types.get(root.as_posix(), "mixed")
-            if library_type in ("movie", "tv", "anime"):
-                category_parents = [(root, library_type, root.name)]
-            else:
-                category_parents = []
-                try:
-                    media_roots = sorted(
-                        (path for path in root.iterdir() if path.is_dir()),
-                        key=lambda path: path.name.casefold(),
+            category_parents = []
+            try:
+                media_roots = sorted(
+                    (path for path in root.iterdir() if path.is_dir()),
+                    key=lambda path: path.name.casefold(),
+                )
+            except OSError:
+                continue
+            for media_root in media_roots:
+                detected_type = category_root_types.get(media_root.name.casefold())
+                if detected_type:
+                    category_parents.append(
+                        (media_root, detected_type, media_root.name)
                     )
-                except OSError:
-                    continue
-                for media_root in media_roots:
-                    detected_type = SECONDARY_CATEGORY_ROOT_TYPES.get(media_root.name)
-                    if detected_type:
-                        category_parents.append(
-                            (media_root, detected_type, media_root.name)
-                        )
             for category_parent, category_type, parent_label in category_parents:
                 try:
                     category_paths = sorted(
@@ -1497,10 +1961,61 @@ class EmbyLibraryOrganizer(_PluginBase):
         return sorted(categories.values(), key=lambda item: item["title"])
 
     @staticmethod
-    def _category_library_type(path: Path) -> str:
-        """根据分类路径推断媒体库类型。"""
+    def _configured_paths(config: Dict[str, Any], key: str) -> List[Path]:
+        """解析指定的多行路径配置。"""
+        value = config.get(key) or ""
+        lines = value if isinstance(value, list) else str(value).splitlines()
+        return [
+            Path(str(line).strip()).expanduser()
+            for line in lines
+            if str(line).strip()
+        ]
+
+    def _category_root_types(
+        self,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, str]:
+        """返回用户配置的分类根文件夹名称与媒体类型映射。"""
+        effective_config = config or self._config
+        folder_configs = {
+            "movie_category_root_names": "movie",
+            "tv_category_root_names": "tv",
+            "anime_category_root_names": "anime",
+        }
+        root_types: Dict[str, str] = {}
+        for key, library_type in folder_configs.items():
+            value = effective_config.get(key) or ""
+            lines = value if isinstance(value, list) else str(value).splitlines()
+            for line in lines:
+                folder_name = str(line).strip()
+                if folder_name:
+                    root_types[folder_name.casefold()] = library_type
+        return root_types
+
+    def _category_library_type(self, path: Path) -> str:
+        """根据媒体库路径配置和识别文件夹名推断媒体类型。"""
+        organizer_config = config_from_dict(self._config)
+        try:
+            resolved_path = path.expanduser().resolve()
+        except OSError:
+            resolved_path = path.expanduser().absolute()
+        for library_root in organizer_config.library_paths:
+            try:
+                resolved_root = library_root.expanduser().resolve()
+            except OSError:
+                resolved_root = library_root.expanduser().absolute()
+            library_type = organizer_config.library_types.get(
+                library_root.as_posix(),
+                organizer_config.library_types.get(resolved_root.as_posix(), "mixed"),
+            )
+            if (
+                library_type in ("movie", "tv", "anime")
+                and self._path_is_within(resolved_path, resolved_root)
+            ):
+                return library_type
+        category_root_types = self._category_root_types()
         for part in reversed(path.parts):
-            library_type = SECONDARY_CATEGORY_ROOT_TYPES.get(part)
+            library_type = category_root_types.get(part.casefold())
             if library_type:
                 return library_type
         return "mixed"
@@ -1514,80 +2029,424 @@ class EmbyLibraryOrganizer(_PluginBase):
         except ValueError:
             return False
 
-    @staticmethod
-    def _manual_delete_action(
-        task_id: str,
-        path: Path,
-        action_type: ActionType,
-    ) -> PlanAction:
-        """生成详情页手动清理动作并记录源文件快照。"""
-        stat = path.stat()
-        return PlanAction(
-            action_id=(
-                f"manual-{task_id}-"
-                f"{hashlib.sha256(path.as_posix().encode('utf-8')).hexdigest()[:16]}"
+    def _resolve_delete_strm_paths(
+        self,
+        path: str,
+        episode_group: bool,
+    ) -> Tuple[List[Path], Optional[str]]:
+        """校验缺失结果并返回单个或同格式整组STRM路径。"""
+        missing_plan = self.get_data("latest_missing_plan") or {}
+        candidate_paths = {
+            str(issue.get("path") or "")
+            for issue in missing_plan.get("issues") or []
+            if issue.get("code") in ("missing_nfo", "missing_mediainfo")
+        }
+        if path not in candidate_paths:
+            return [], "该STRM不在当前缺失元数据查询结果中"
+        strm_path = Path(path).expanduser()
+        if not self._is_managed_local_file(strm_path, suffix=STRM_SUFFIX):
+            return [], "STRM文件不存在或不在已配置媒体库内"
+        resolved_path = strm_path.resolve()
+        if not episode_group:
+            return [resolved_path], None
+        if (
+            self._category_library_type(resolved_path) != "tv"
+            or not resolved_path.parent.name.casefold().startswith("season ")
+        ):
+            return [], "同格式整组清理仅支持电视剧季目录"
+        template = self._episode_name_template(resolved_path.stem)
+        if not template:
+            return [], "文件名未识别到SxxExx或第X集格式"
+        matched_paths = sorted(
+            candidate.resolve()
+            for candidate in resolved_path.parent.iterdir()
+            if not candidate.is_symlink()
+            and candidate.is_file()
+            and candidate.suffix.casefold() == STRM_SUFFIX
+            and self._episode_name_template(candidate.stem) == template
+        )
+        max_delete_count = config_from_dict(self._config).max_delete_count
+        if len(matched_paths) > max_delete_count:
+            return [], (
+                f"同格式匹配到{len(matched_paths)}个STRM，超过单次最大删除数量"
+                f"{max_delete_count}"
+            )
+        return matched_paths, None
+
+    def _execute_direct_delete(
+        self,
+        strm_paths: List[Path],
+        include_sidecars: bool,
+        include_cloud: bool,
+    ) -> Dict[str, Any]:
+        """直接删除CD2源文件及本地文件，并通过父目录复核。"""
+        storage_chain = StorageChain()
+        cloud_results: List[Dict[str, Any]] = []
+        local_results: List[Dict[str, Any]] = []
+        cloud_path_by_strm: Dict[str, Path] = {}
+        cloud_result_by_strm: Dict[str, Dict[str, Any]] = {}
+        removed_strm_paths: Set[str] = set()
+        if include_cloud:
+            cloud_paths: List[Path] = []
+            for strm_path in strm_paths:
+                cloud_path, cloud_error = self._cd2_path_from_strm(strm_path)
+                if cloud_error:
+                    cloud_result = {
+                        "path": "",
+                        "name": strm_path.name,
+                        "status": "failed",
+                        "verified": False,
+                        "message": cloud_error,
+                    }
+                    cloud_results.append(cloud_result)
+                    cloud_result_by_strm[strm_path.as_posix()] = cloud_result
+                else:
+                    cloud_path_by_strm[strm_path.as_posix()] = cloud_path
+                    cloud_paths.append(cloud_path)
+            cloud_results.extend(
+                self._delete_paths_and_verify(
+                    cloud_paths,
+                    storage_chain,
+                    verify_absent_parent=True,
+                )
+            )
+            cloud_result_by_path = {
+                str(result.get("path") or ""): result
+                for result in cloud_results
+                if result.get("path")
+            }
+            for strm_key, cloud_path in cloud_path_by_strm.items():
+                cloud_result_by_strm[strm_key] = cloud_result_by_path[
+                    cloud_path.as_posix()
+                ]
+
+        local_paths: List[Path] = []
+        for strm_path in strm_paths:
+            cloud_result = cloud_result_by_strm.get(strm_path.as_posix())
+            if include_cloud and not bool((cloud_result or {}).get("verified")):
+                local_results.append(
+                    {
+                        "path": strm_path.as_posix(),
+                        "name": strm_path.name,
+                        "status": "skipped",
+                        "verified": False,
+                        "message": "CD2源文件未通过删除复核，本地文件未处理",
+                    }
+                )
+                continue
+            if include_sidecars:
+                local_paths.extend(owned_sidecar_paths(strm_path))
+            local_paths.append(strm_path)
+
+        local_results.extend(
+            self._delete_paths_and_verify(local_paths, storage_chain)
+        )
+        local_result_by_path = {
+            str(result.get("path") or ""): result
+            for result in local_results
+            if result.get("path")
+        }
+        for strm_path in strm_paths:
+            strm_result = local_result_by_path.get(strm_path.as_posix())
+            if strm_result and bool(strm_result.get("verified")):
+                removed_strm_paths.add(strm_path.as_posix())
+        all_results = [*cloud_results, *local_results]
+        verified = bool(all_results) and all(
+            bool(item.get("verified")) for item in all_results
+        )
+        if removed_strm_paths:
+            self._remove_plan_issues("latest_missing_plan", removed_strm_paths)
+        response = {
+            "code": 0 if verified else 1,
+            "msg": (
+                f"删除并复核完成：{len(removed_strm_paths)}/{len(strm_paths)}个STRM"
+                if verified
+                else "删除未全部完成，请查看仍存在或跳过的文件"
             ),
-            action_type=action_type,
-            path=path.as_posix(),
-            source_size=stat.st_size,
-            source_modify_time=stat.st_mtime,
-            source_sha1=hashlib.sha1(path.read_bytes()).hexdigest(),
-            allowed=True,
-            risk="medium",
-            reason="用户在缺失元数据详情页手动选择清理",
+            "data": {
+                "verified": verified,
+                "strm_count": len(strm_paths),
+                "removed_strm_count": len(removed_strm_paths),
+                "cloud_results": cloud_results,
+                "local_results": local_results,
+            },
+        }
+        self._save_direct_delete_result(response)
+        return response
+
+    def _delete_path_and_verify(
+        self,
+        path: Path,
+        storage_chain: Optional[StorageChain] = None,
+    ) -> Dict[str, Any]:
+        """通过MP本地存储删除文件，并重新列举父目录复核。"""
+        storage_chain = storage_chain or StorageChain()
+        return self._delete_paths_and_verify([path], storage_chain)[0]
+
+    def _delete_paths_and_verify(
+        self,
+        paths: List[Path],
+        storage_chain: StorageChain,
+        verify_absent_parent: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """批量删除文件，并按父目录成组复核删除结果。"""
+        unique_paths = list(dict.fromkeys(paths))
+        completed: Dict[Path, Dict[str, Any]] = {}
+        pending: Dict[Path, bool] = {}
+        originally_absent: Set[Path] = set()
+        for path in unique_paths:
+            try:
+                file_item = storage_chain.get_file_item(storage="local", path=path)
+                if not file_item:
+                    if verify_absent_parent:
+                        pending[path] = True
+                        originally_absent.add(path)
+                        continue
+                    completed[path] = {
+                        "path": path.as_posix(),
+                        "name": path.name,
+                        "status": "absent",
+                        "verified": True,
+                        "message": "文件原本已不存在",
+                    }
+                    continue
+                if file_item.type != "file":
+                    completed[path] = {
+                        "path": path.as_posix(),
+                        "name": path.name,
+                        "status": "failed",
+                        "verified": False,
+                        "message": "目标不是普通文件，已拒绝删除",
+                    }
+                    continue
+                pending[path] = bool(storage_chain.delete_file(file_item))
+            except Exception as err:
+                completed[path] = {
+                    "path": path.as_posix(),
+                    "name": path.name,
+                    "status": "failed",
+                    "verified": False,
+                    "message": f"删除调用异常：{str(err)}",
+                }
+
+        remaining = set(pending)
+        for delay in self._DELETE_VERIFY_DELAYS:
+            if not remaining:
+                break
+            if delay:
+                sleep(delay)
+            paths_by_parent: Dict[Path, List[Path]] = {}
+            for path in remaining:
+                paths_by_parent.setdefault(path.parent, []).append(path)
+            verified_paths: Set[Path] = set()
+            for parent, parent_paths in paths_by_parent.items():
+                try:
+                    parent_item = storage_chain.get_file_item(
+                        storage="local",
+                        path=parent,
+                    )
+                    if not parent_item:
+                        verified_paths.update(
+                            path
+                            for path in parent_paths
+                            if path not in originally_absent
+                        )
+                        continue
+                    children = storage_chain.list_files(parent_item)
+                    if children is None:
+                        continue
+                    existing_names = {
+                        Path(item.path or "").name
+                        for item in children
+                    }
+                    verified_paths.update(
+                        path for path in parent_paths if path.name not in existing_names
+                    )
+                except Exception as err:
+                    logger.warning(
+                        f"【{self.plugin_name}】删除后目录复核失败：{parent}，{str(err)}"
+                    )
+            remaining.difference_update(verified_paths)
+
+        for path, delete_result in pending.items():
+            verified = path not in remaining
+            completed[path] = {
+                "path": path.as_posix(),
+                "name": path.name,
+                "status": "deleted" if verified else "failed",
+                "verified": verified,
+                "message": (
+                    (
+                        "文件原本已不存在，已通过父目录复核"
+                        if path in originally_absent
+                        else "已删除并通过父目录复核"
+                    )
+                    if verified
+                    else (
+                        "删除调用失败，文件仍存在"
+                        if not delete_result
+                        else "删除后文件仍存在"
+                    )
+                ),
+            }
+        return [completed[path] for path in unique_paths]
+
+    def _cd2_path_from_strm(self, strm_path: Path) -> Tuple[Path, Optional[str]]:
+        """读取STRM首行并校验CD2挂载路径。"""
+        content = strm_path.read_text(encoding="utf-8", errors="ignore")
+        first_line = next(
+            (line.strip() for line in content.splitlines() if line.strip()),
+            "",
+        )
+        if not first_line:
+            return Path(), f"{strm_path.name} 内容为空"
+        cloud_path = Path(first_line).expanduser()
+        if not cloud_path.is_absolute() or ".." in cloud_path.parts:
+            return Path(), f"{strm_path.name} 未指向有效的CD2绝对挂载路径"
+        roots = self._configured_cd2_roots()
+        if not roots:
+            return Path(), "请先在插件设置中配置CD2挂载根目录"
+        absolute_path = cloud_path.absolute()
+        matched_roots = [
+            root for root in roots if self._path_is_within(absolute_path, root)
+        ]
+        if not matched_roots:
+            return Path(), f"CD2路径超出允许根目录：{cloud_path}"
+        if not any(root.is_dir() for root in matched_roots):
+            return Path(), "CD2挂载根目录当前不可访问，已停止删除"
+        return absolute_path, None
+
+    def _configured_cd2_roots(self) -> List[Path]:
+        """返回配置的CD2挂载根目录。"""
+        value = self._config.get("cd2_mount_paths") or ""
+        if isinstance(value, list):
+            lines = value
+        else:
+            lines = str(value).splitlines()
+        return [
+            Path(str(line).strip()).expanduser().absolute()
+            for line in lines
+            if str(line).strip()
+        ]
+
+    def _is_managed_local_file(
+        self,
+        path: Path,
+        suffix: Optional[str] = None,
+    ) -> bool:
+        """判断文件是否为已配置媒体库内的普通文件。"""
+        if path.is_symlink() or not path.is_file():
+            return False
+        if suffix and path.suffix.casefold() != suffix.casefold():
+            return False
+        resolved_path = path.resolve()
+        return any(
+            self._path_is_within(resolved_path, root.expanduser().resolve())
+            for root in config_from_dict(self._config).library_paths
         )
 
-    def _execute_manual_cleanup(
-        self,
-        cleanup_paths: List[Path],
-        organizer_config: OrganizerConfig,
-        strm_count: int,
-    ) -> Dict[str, Any]:
-        """执行详情页手动清理并重新查询缺失元数据。"""
-        task_id = datetime.now().strftime("%Y%m%d%H%M%S")
-        actions = [
-            self._manual_delete_action(
-                task_id=task_id,
-                path=cleanup_path,
-                action_type=(
-                    ActionType.DELETE_LOCAL_STRM
-                    if cleanup_path.suffix.lower() == STRM_SUFFIX
-                    else ActionType.DELETE_SIDECAR
-                ),
-            )
-            for cleanup_path in cleanup_paths
+    def _is_managed_local_path(self, path: Path) -> bool:
+        """判断路径是否位于已配置媒体库内且不经过符号链接目标。"""
+        if not path.is_absolute() or ".." in path.parts or path.is_symlink():
+            return False
+        try:
+            resolved_path = path.resolve()
+            roots = [
+                root.expanduser().resolve()
+                for root in config_from_dict(self._config).library_paths
+            ]
+        except OSError:
+            return False
+        return any(
+            self._path_is_within(resolved_path, root)
+            for root in roots
+        )
+
+    def _remove_plan_issues(self, data_key: str, paths: Set[str]) -> None:
+        """从持久化专项扫描结果中移除已复核删除的路径。"""
+        plan = dict(self.get_data(data_key) or {})
+        issues = [
+            issue
+            for issue in plan.get("issues") or []
+            if str(issue.get("path") or "") not in paths
         ]
-        plan = OrganizerPlan(
-            task_id=task_id,
-            created_at=datetime.now().isoformat(timespec="seconds"),
-            dry_run=organizer_config.dry_run,
-            require_confirm=False,
-            issues=[],
-            duplicate_groups=[],
-            actions=actions,
-            summary={},
-        )
-        report = EmbyLibraryOrganizerEngine(organizer_config).execute_plan(
-            plan=plan,
-            data_path=self.get_data_path(),
-            confirmed=True,
-        )
-        execution_data = execution_report_to_dict(report)
-        self.save_data("latest_execution", execution_data)
-        self._append_history("execution_history", execution_data)
-        refresh_result = self._scan_and_save(missing_metadata_only=True)
-        if report.dry_run:
-            message = f"演练完成：匹配{strm_count}个STRM，未删除文件"
-        else:
-            message = f"清理完成：处理{strm_count}个STRM"
+        plan["issues"] = issues
+        summary = dict(plan.get("summary") or {})
+        issue_code_counts: Dict[str, int] = {}
+        for issue in issues:
+            code = str(issue.get("code") or "")
+            issue_code_counts[code] = issue_code_counts.get(code, 0) + 1
+        summary["issue_count"] = len(issues)
+        summary["issue_code_counts"] = issue_code_counts
+        plan["summary"] = summary
+        self.save_data(data_key, plan)
+        self._ui_result_cache.pop(data_key, None)
+
+    def _save_direct_delete_result(self, response: Dict[str, Any]) -> None:
+        """保存最近一次直接删除及复核结果。"""
+        data = {
+            "finished_at": datetime.now().isoformat(timespec="seconds"),
+            **response,
+        }
+        self.save_data("last_direct_delete", data)
+        self._append_history("direct_delete_history", data)
+
+    def _cached_ui_items(
+        self,
+        data_key: str,
+        builder: Callable[[Dict[str, Any]], List[Dict[str, Any]]],
+    ) -> List[Dict[str, Any]]:
+        """按专项扫描任务和问题数量缓存Vue页面转换结果。"""
+        plan = self.get_data(data_key) or {}
+        signature = (plan.get("task_id"), len(plan.get("issues") or []))
+        cached = self._ui_result_cache.get(data_key) or {}
+        if cached.get("signature") == signature:
+            return cached.get("items") or []
+        items = builder(plan)
+        self._ui_result_cache[data_key] = {
+            "signature": signature,
+            "items": items,
+        }
+        return items
+
+    def _orphan_ui_items(self, plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """将多余元数据问题转换为Vue页面条目。"""
+        items = []
+        categories = self._discover_secondary_categories()
+        for issue in plan.get("issues") or []:
+            if issue.get("code") != "orphan_sidecar":
+                continue
+            path = str(issue.get("path") or "")
+            name = Path(path).name
+            if name.casefold().endswith("-mediainfo.json"):
+                metadata_type = "JSON"
+            elif Path(name).suffix.casefold() == ".nfo":
+                metadata_type = "NFO"
+            else:
+                metadata_type = "缩略图"
+            items.append(
+                {
+                    "path": path,
+                    "name": name,
+                    "category": self._category_label_from_path(path, categories),
+                    "type": metadata_type,
+                }
+            )
+        return sorted(items, key=lambda item: (item["category"], item["name"]))
+
+    @staticmethod
+    def _paginate_items(items: List[Any], page: int, page_size: int) -> Dict[str, Any]:
+        """返回统一的分页数据。"""
+        total = len(items)
+        page_count = max((total + page_size - 1) // page_size, 1)
+        current_page = min(max(int(page or 1), 1), page_count)
+        start = (current_page - 1) * page_size
         return {
-            "code": 0,
-            "msg": message,
-            "data": {
-                "strm_count": strm_count,
-                "execution": execution_data,
-                "refresh": refresh_result,
-            },
+            "items": items[start : start + page_size],
+            "total": total,
+            "page": current_page,
+            "page_count": page_count,
+            "page_size": page_size,
         }
 
     @staticmethod
@@ -2019,10 +2878,17 @@ class EmbyLibraryOrganizer(_PluginBase):
     @classmethod
     def _merge_defaults(cls, config: Dict[str, Any]) -> Dict[str, Any]:
         """合并默认配置。"""
-        return {
+        merged = {
             **cls._default_config(),
             **config,
         }
+        for key in (
+            "movie_library_paths",
+            "tv_library_paths",
+            "anime_library_paths",
+        ):
+            merged.pop(key, None)
+        return merged
 
     @staticmethod
     def _validate_cron(config: Dict[str, Any]) -> List[ConfigValidationIssue]:
@@ -2049,10 +2915,13 @@ class EmbyLibraryOrganizer(_PluginBase):
         return {
             "enabled": False,
             "library_paths": "",
-            "movie_library_paths": "",
-            "tv_library_paths": "",
-            "anime_library_paths": "",
+            "bluray_library_paths": "",
+            "movie_category_root_names": "电影",
+            "tv_category_root_names": "电视剧\n剧集",
+            "anime_category_root_names": "动漫",
             "missing_metadata_categories": [],
+            "orphan_metadata_categories": [],
+            "cd2_mount_paths": "/CloudNAS/CloudDrive",
             "library_types": {},
             "exclude_patterns": "",
             "protected_local_paths": "",
@@ -2263,8 +3132,7 @@ class EmbyLibraryOrganizer(_PluginBase):
         paths.discard("")
         return len(paths)
 
-    @classmethod
-    def _missing_metadata_table(cls, plan: Dict[str, Any]) -> Dict[str, Any]:
+    def _missing_metadata_table(self, plan: Dict[str, Any]) -> Dict[str, Any]:
         """生成 STRM 缺失元数据查询结果表格。"""
         missing_by_path: Dict[str, List[Dict[str, Any]]] = {}
         for issue in plan.get("issues") or []:
@@ -2274,10 +3142,11 @@ class EmbyLibraryOrganizer(_PluginBase):
             if path:
                 missing_by_path.setdefault(path, []).append(issue)
         visible_items = list(sorted(missing_by_path.items()))[
-            : cls._OVERVIEW_SAMPLE_SIZE
+            : self._OVERVIEW_SAMPLE_SIZE
         ]
+        categories = self._discover_secondary_categories()
         rows = [
-            cls._missing_metadata_row(path, issues)
+            self._missing_metadata_row(path, issues, categories)
             for path, issues in visible_items
         ]
         if not rows:
@@ -2326,21 +3195,24 @@ class EmbyLibraryOrganizer(_PluginBase):
             ],
         }
 
-    @classmethod
     def _missing_metadata_row(
-        cls,
+        self,
         path: str,
         issues: List[Dict[str, Any]],
+        categories: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         """生成单个 STRM 缺失元数据展示行。"""
         return {
             "component": "tr",
             "content": [
-                {"component": "td", "text": cls._category_label_from_path(path)},
+                {
+                    "component": "td",
+                    "text": self._category_label_from_path(path, categories),
+                },
                 {"component": "td", "text": Path(path).name},
                 {
                     "component": "td",
-                    "text": "、".join(cls._missing_metadata_types(issues)),
+                    "text": "、".join(self._missing_metadata_types(issues)),
                 },
             ],
         }
@@ -2355,13 +3227,36 @@ class EmbyLibraryOrganizer(_PluginBase):
         }
         return sorted(types)
 
-    @staticmethod
-    def _category_label_from_path(path: str) -> str:
-        """从媒体路径提取二级分类标签。"""
-        parts = Path(path).parts
-        for index, part in enumerate(parts[:-1]):
-            if part in SECONDARY_CATEGORY_ROOT_TYPES and len(parts) > index + 1:
-                return f"{part} / {parts[index + 1]}"
+    def _category_label_from_path(
+        self,
+        path: str,
+        categories: Optional[List[Dict[str, str]]] = None,
+    ) -> str:
+        """按当前媒体库和识别文件夹配置提取二级分类标签。"""
+        item_path = Path(path)
+        try:
+            resolved_path = item_path.expanduser().resolve()
+        except OSError:
+            resolved_path = item_path.expanduser().absolute()
+        for bluray_root in self._configured_paths(
+            self._config,
+            "bluray_library_paths",
+        ):
+            try:
+                resolved_bluray_root = bluray_root.resolve()
+            except OSError:
+                resolved_bluray_root = bluray_root.absolute()
+            if self._path_is_within(resolved_path, resolved_bluray_root):
+                return "蓝光"
+        category_items = (
+            categories
+            if categories is not None
+            else self._discover_secondary_categories()
+        )
+        for category in category_items:
+            category_path = Path(category["value"])
+            if self._path_is_within(resolved_path, category_path):
+                return category["title"]
         return Path(path).parent.name
 
     def _missing_metadata_detail_page(self, page: int) -> List[Dict[str, Any]]:
@@ -2431,13 +3326,13 @@ class EmbyLibraryOrganizer(_PluginBase):
         content.append(self._missing_metadata_pagination(current_page, page_count))
         return content
 
-    @classmethod
     def _build_missing_metadata_groups(
-        cls,
+        self,
         plan: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
         """按电影目录或电视剧剧名目录归组缺失元数据结果。"""
         missing_by_path: Dict[str, List[Dict[str, Any]]] = {}
+        categories = self._discover_secondary_categories()
         for issue in plan.get("issues") or []:
             if issue.get("code") not in ("missing_nfo", "missing_mediainfo"):
                 continue
@@ -2456,7 +3351,8 @@ class EmbyLibraryOrganizer(_PluginBase):
                 group_key,
                 {
                     "title": media_directory.name,
-                    "category": cls._category_label_from_path(path),
+                    "category": self._category_label_from_path(path, categories),
+                    "library_type": self._category_library_type(strm_path),
                     "items": [],
                 },
             )
@@ -2469,7 +3365,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                     ),
                     "name": strm_path.name,
                     "path": path,
-                    "missing": cls._missing_metadata_types(issues),
+                    "missing": self._missing_metadata_types(issues),
                 }
             )
         for group in groups.values():
@@ -2482,8 +3378,7 @@ class EmbyLibraryOrganizer(_PluginBase):
             key=lambda group: (group["category"], group["title"]),
         )
 
-    @staticmethod
-    def _missing_metadata_group_panel(group: Dict[str, Any]) -> Dict[str, Any]:
+    def _missing_metadata_group_panel(self, group: Dict[str, Any]) -> Dict[str, Any]:
         """生成单个影视条目的可展开缺失详情。"""
         items = group.get("items") or []
         rows = [
@@ -2496,7 +3391,7 @@ class EmbyLibraryOrganizer(_PluginBase):
                         "component": "td",
                         "text": "、".join(item.get("missing") or []),
                     },
-                    EmbyLibraryOrganizer._missing_metadata_action_cell(
+                    self._missing_metadata_action_cell(
                         str(item.get("path") or "")
                     ),
                 ],
@@ -2542,8 +3437,7 @@ class EmbyLibraryOrganizer(_PluginBase):
             ],
         }
 
-    @staticmethod
-    def _missing_metadata_action_cell(path: str) -> Dict[str, Any]:
+    def _missing_metadata_action_cell(self, path: str) -> Dict[str, Any]:
         """生成单个STRM的清理操作按钮。"""
         encoded_path = quote(path, safe="")
         buttons = [
@@ -2589,7 +3483,7 @@ class EmbyLibraryOrganizer(_PluginBase):
         ]
         strm_path = Path(path)
         if (
-            EmbyLibraryOrganizer._category_library_type(strm_path) == "tv"
+            self._category_library_type(strm_path) == "tv"
             and strm_path.parent.name.casefold().startswith("season ")
             and EmbyLibraryOrganizer._episode_name_template(strm_path.stem)
         ):
@@ -2955,30 +3849,40 @@ class EmbyLibraryOrganizer(_PluginBase):
                     {
                         "component": "VTextarea",
                         "props": {
-                            "model": "movie_library_paths",
-                            "label": "电影媒体库路径",
+                            "model": "bluray_library_paths",
+                            "label": "蓝光媒体库路径",
                             "rows": 2,
-                            "hint": "用于电影重复识别和命名检查",
+                            "hint": "不识别子分类，在专项扫描中统一显示为蓝光",
                             "persistent-hint": True,
                         },
                     },
                     {
                         "component": "VTextarea",
                         "props": {
-                            "model": "tv_library_paths",
-                            "label": "剧集媒体库路径",
+                            "model": "movie_category_root_names",
+                            "label": "电影识别文件夹名",
                             "rows": 2,
-                            "hint": "用于 SxxExx 剧集重复识别",
+                            "hint": "每行一个一级文件夹名称",
                             "persistent-hint": True,
                         },
                     },
                     {
                         "component": "VTextarea",
                         "props": {
-                            "model": "anime_library_paths",
-                            "label": "动漫媒体库路径",
+                            "model": "tv_category_root_names",
+                            "label": "电视剧识别文件夹名",
                             "rows": 2,
-                            "hint": "按剧集规则处理动漫目录",
+                            "hint": "每行一个一级文件夹名称",
+                            "persistent-hint": True,
+                        },
+                    },
+                    {
+                        "component": "VTextarea",
+                        "props": {
+                            "model": "anime_category_root_names",
+                            "label": "动漫识别文件夹名",
+                            "rows": 2,
+                            "hint": "每行一个一级文件夹名称",
                             "persistent-hint": True,
                         },
                     },
@@ -2987,12 +3891,12 @@ class EmbyLibraryOrganizer(_PluginBase):
                         "props": {
                             "model": "missing_metadata_categories",
                             "label": "缺失元数据查询分类",
-                            "items": self._discover_secondary_categories(),
+                            "items": self._category_options(),
                             "multiple": True,
                             "chips": True,
                             "closable-chips": True,
                             "class": "mt-6 mb-4",
-                            "hint": "自动识别电影、电视剧和动漫目录下的二级分类，可多选",
+                            "hint": "可选择混合媒体库二级分类、蓝光或全部",
                             "persistent-hint": True,
                         },
                     },

@@ -1,11 +1,11 @@
 <template>
-  <div class="config-page">
+  <div class="plugin-config config-page">
     <header class="config-header">
       <div>
         <div class="text-h6">Emby媒体库整理</div>
         <div class="text-caption text-medium-emphasis">插件设置</div>
       </div>
-      <v-btn icon="mdi-close" variant="text" size="small" title="关闭" @click="emit('close')" />
+      <v-btn icon="mdi-close" variant="text" size="small" title="关闭" aria-label="关闭插件设置" @click="emit('close')" />
     </header>
 
     <v-divider />
@@ -27,9 +27,17 @@
       <section class="config-section">
         <div class="section-title">媒体库路径</div>
         <div class="field-grid">
-          <v-textarea v-model="config.library_paths" label="混合媒体库" rows="2" auto-grow variant="outlined" />
+          <v-textarea
+            v-model="config.library_paths"
+            label="混合媒体库"
+            rows="2"
+            auto-grow
+            variant="outlined"
+            :error-messages="libraryPathError"
+          />
           <v-textarea v-model="config.bluray_library_paths" label="蓝光媒体库" rows="2" auto-grow variant="outlined" />
         </div>
+        <p class="field-help">每行填写一个绝对路径。混合媒体库会识别电影、电视剧和动漫二级分类；蓝光媒体库统一归入“蓝光”。</p>
         <div class="subsection-title">分类识别文件夹名</div>
         <div class="field-grid">
           <v-textarea v-model="config.movie_category_root_names" label="电影文件夹名" rows="2" auto-grow variant="outlined" />
@@ -85,6 +93,7 @@
             @update:model-value="updateCategorySelection('missing_metadata_categories', $event)"
           />
         </div>
+        <p class="field-help">页面专项扫描会使用这里保存的分类；“全部（全量）”与具体分类不能同时选择。</p>
       </section>
 
       <v-divider />
@@ -107,12 +116,13 @@
             variant="outlined"
           />
         </div>
+        <p class="field-help">CD2 源文件必须位于允许的挂载根目录内，删除仍需经过预览、确认和复核。</p>
       </section>
     </main>
 
     <footer class="config-actions">
       <v-btn variant="text" @click="emit('close')">取消</v-btn>
-      <v-btn color="primary" prepend-icon="mdi-content-save" @click="saveConfig">保存</v-btn>
+      <v-btn color="primary" prepend-icon="mdi-content-save" :disabled="saveDisabled" @click="saveConfig">保存</v-btn>
     </footer>
 
     <v-snackbar v-model="snackbar.show" :color="snackbar.color" timeout="3500">
@@ -122,7 +132,7 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 
 import { EMBY_LIBRARY_ORGANIZER_PLUGIN_ID } from '../utils/pluginId.js'
 
@@ -144,6 +154,14 @@ const categories = ref([])
 const categoriesLoading = ref(false)
 const config = reactive({})
 const snackbar = reactive({ show: false, text: '', color: 'error' })
+const libraryPathError = computed(() => (
+  config.enabled
+  && !String(config.library_paths || '').trim()
+  && !String(config.bluray_library_paths || '').trim()
+    ? ['启用插件后至少配置一个媒体库路径']
+    : []
+))
+const saveDisabled = computed(() => libraryPathError.value.length > 0)
 
 const replaceConfig = (value) => {
   for (const key of Object.keys(config)) delete config[key]
@@ -218,12 +236,15 @@ onMounted(loadCategories)
 </script>
 
 <style scoped>
-.config-page {
+.plugin-config {
   display: flex;
-  height: min(760px, 90vh);
-  min-height: 560px;
+  min-height: min(560px, 88vh);
+  max-height: 92vh;
   flex-direction: column;
+  overflow: hidden;
   background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+  letter-spacing: 0;
 }
 
 .config-header,
@@ -233,6 +254,18 @@ onMounted(loadCategories)
   justify-content: space-between;
   gap: 16px;
   padding: 18px 22px;
+}
+
+.config-header :deep(.v-btn),
+.config-actions :deep(.v-btn) {
+  min-height: 44px;
+}
+
+.field-help {
+  margin: 8px 0 0;
+  color: rgba(var(--v-theme-on-surface), 0.72);
+  font-size: 0.8125rem;
+  line-height: 1.5;
 }
 
 .config-content {
@@ -292,7 +325,7 @@ onMounted(loadCategories)
 }
 
 @media (max-width: 700px) {
-  .config-page {
+  .plugin-config {
     height: 100vh;
     min-height: 0;
   }
@@ -308,6 +341,15 @@ onMounted(loadCategories)
   .config-actions {
     padding-right: 16px;
     padding-left: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plugin-config *,
+  .plugin-config *::before,
+  .plugin-config *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
   }
 }
 </style>

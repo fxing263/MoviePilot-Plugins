@@ -1,5 +1,5 @@
 <template>
-  <div class="file-search-page">
+  <div class="plugin-workbench file-search-page">
     <header class="page-header">
       <div class="identity-block">
         <div class="identity-row">
@@ -20,11 +20,12 @@
           variant="text"
           size="small"
           title="刷新"
+          aria-label="刷新插件状态"
           :loading="refreshing"
           @click="refreshAll"
         />
-        <v-btn icon="mdi-cog" variant="text" size="small" title="设置" @click="emit('switch')" />
-        <v-btn icon="mdi-close" variant="text" size="small" title="关闭" @click="emit('close')" />
+        <v-btn icon="mdi-cog" variant="text" size="small" title="设置" aria-label="打开插件设置" @click="emit('switch')" />
+        <v-btn icon="mdi-close" variant="text" size="small" title="关闭" aria-label="关闭插件页面" @click="emit('close')" />
       </div>
     </header>
 
@@ -36,35 +37,15 @@
     </div>
 
     <template v-else>
-      <div v-if="taskBusy || state.last_error" class="task-banner" :class="taskFailed ? 'error' : ''">
+      <div class="task-banner" :class="taskFailed ? 'error' : ''" aria-live="polite" aria-atomic="true">
         <v-progress-circular v-if="taskBusy" indeterminate size="18" width="2" />
-        <v-icon v-else icon="mdi-alert-circle-outline" size="19" />
-        <span>{{ state.last_error || state.task_message }}</span>
-      </div>
-
-      <section class="search-toolbar">
-        <v-text-field
-          v-model="searchInput"
-          class="search-input"
-          label="搜索文件名或相对路径"
-          prepend-inner-icon="mdi-magnify"
-          variant="outlined"
-          density="compact"
-          clearable
-          hide-details
-          :disabled="!state.enabled || taskBusy"
-          @keyup.enter="submitSearch"
+        <v-icon
+          v-else
+          :icon="state.last_error ? 'mdi-alert-circle-outline' : 'mdi-information-outline'"
+          size="19"
         />
-        <v-btn
-          color="primary"
-          prepend-icon="mdi-folder-search-outline"
-          :loading="state.task_kind === 'search' && taskBusy"
-          :disabled="searchDisabled"
-          @click="submitSearch"
-        >
-          搜索
-        </v-btn>
-      </section>
+        <span>{{ state.last_error || state.task_message || '等待搜索任务' }}</span>
+      </div>
 
       <section class="metric-grid" aria-label="搜索结果概览">
         <div class="metric-cell">
@@ -85,15 +66,56 @@
         </div>
       </section>
 
-      <section v-if="deleteReport" class="delete-report" :class="deleteReport.verified ? 'success' : 'error'">
-        <v-icon :icon="deleteReport.verified ? 'mdi-check-circle-outline' : 'mdi-alert-circle-outline'" size="20" />
-        <div>
-          <strong>{{ deleteReport.message }}</strong>
-          <span>{{ deleteReportDetail }}</span>
-        </div>
-      </section>
+      <v-tabs v-model="activeView" class="view-tabs" color="primary" show-arrows>
+        <v-tab value="results">
+          搜索结果
+          <span v-if="totalResults" class="tab-count">{{ totalResults }}</span>
+        </v-tab>
+        <v-tab value="status">任务状态</v-tab>
+        <v-tab value="activity">
+          执行记录
+          <span v-if="state.logs.length" class="tab-count">{{ state.logs.length }}</span>
+        </v-tab>
+      </v-tabs>
 
-      <section v-if="totalResults > 0 && !resultsLoading" class="selection-toolbar">
+      <v-divider />
+
+      <v-window v-model="activeView" class="workbench-window">
+        <v-window-item value="results">
+
+          <section class="search-toolbar">
+            <v-text-field
+              v-model="searchInput"
+              class="search-input"
+              label="搜索文件名或相对路径"
+              prepend-inner-icon="mdi-magnify"
+              variant="outlined"
+              density="compact"
+              clearable
+              hide-details
+              :disabled="!state.enabled || taskBusy"
+              @keyup.enter="submitSearch"
+            />
+            <v-btn
+              color="primary"
+              prepend-icon="mdi-folder-search-outline"
+              :loading="state.task_kind === 'search' && taskBusy"
+              :disabled="searchDisabled"
+              @click="submitSearch"
+            >
+              搜索
+            </v-btn>
+          </section>
+
+          <section v-if="deleteReport" class="delete-report" :class="deleteReport.verified ? 'success' : 'error'">
+            <v-icon :icon="deleteReport.verified ? 'mdi-check-circle-outline' : 'mdi-alert-circle-outline'" size="20" />
+            <div>
+              <strong>{{ deleteReport.message }}</strong>
+              <span>{{ deleteReportDetail }}</span>
+            </div>
+          </section>
+
+          <section v-if="totalResults > 0 && !resultsLoading" class="selection-toolbar">
         <div class="selection-summary">
           <v-icon icon="mdi-checkbox-multiple-marked-outline" size="19" />
           <span>已选择 <strong>{{ selectedCount }}</strong> / {{ totalResults }} 项</span>
@@ -141,9 +163,9 @@
             删除所选源文件
           </v-btn>
         </div>
-      </section>
+          </section>
 
-      <main class="results-area">
+          <main class="results-area">
         <div v-if="resultsLoading" class="inline-loading">
           <v-progress-circular indeterminate size="22" width="2" color="primary" />
           <span>正在读取搜索结果</span>
@@ -214,18 +236,71 @@
           class="pagination"
           @update:model-value="() => loadResults()"
         />
-      </main>
+          </main>
 
-      <footer class="activity-footer">
-        <div>
-          <span>最近搜索</span>
-          <strong>{{ searchSummary.query || '-' }}</strong>
-        </div>
-        <div>
-          <span>结果状态</span>
-          <strong>{{ searchSummary.message || '尚未搜索' }}</strong>
-        </div>
-      </footer>
+          <footer class="activity-footer">
+            <div>
+              <span>最近搜索</span>
+              <strong>{{ searchSummary.query || '-' }}</strong>
+            </div>
+            <div>
+              <span>结果状态</span>
+              <strong>{{ searchSummary.message || '尚未搜索' }}</strong>
+            </div>
+          </footer>
+        </v-window-item>
+
+        <v-window-item value="status">
+          <section class="status-view">
+            <div class="section-heading">
+              <div>
+                <div class="text-subtitle-2">最近任务</div>
+                <div class="section-meta">{{ state.task_message || '尚未执行任务' }}</div>
+              </div>
+              <span class="status-pill" :class="statusTone">
+                <span class="status-dot" />
+                {{ statusLabel }}
+              </span>
+            </div>
+            <div class="detail-list">
+              <div class="detail-row"><span>任务类型</span><strong>{{ state.task_kind || '-' }}</strong></div>
+              <div class="detail-row"><span>任务状态</span><strong>{{ state.task_status || 'idle' }}</strong></div>
+              <div class="detail-row"><span>开始时间</span><strong>{{ formatTime(state.task_started_at) || '-' }}</strong></div>
+              <div class="detail-row"><span>完成时间</span><strong>{{ formatTime(state.task_finished_at) || '-' }}</strong></div>
+            </div>
+            <v-alert v-if="state.last_error" type="error" variant="tonal" density="compact">
+              {{ state.last_error }}
+            </v-alert>
+          </section>
+        </v-window-item>
+
+        <v-window-item value="activity">
+          <section class="activity-view">
+            <div class="activity-panel">
+              <div class="section-heading">
+                <div class="text-subtitle-2">运行日志</div>
+                <span class="section-meta">{{ state.logs.length }} 条</span>
+              </div>
+              <div v-if="state.logs.length" class="log-list">
+                <code v-for="(entry, index) in state.logs" :key="`${index}-${entry}`">{{ entry }}</code>
+              </div>
+              <div v-else class="panel-empty">暂无运行日志</div>
+            </div>
+            <div class="activity-panel">
+              <div class="section-heading">
+                <div class="text-subtitle-2">最近报告</div>
+                <span class="section-meta">{{ reportEntries.length }} 项</span>
+              </div>
+              <div v-if="reportEntries.length" class="detail-list">
+                <div v-for="entry in reportEntries" :key="entry.label" class="detail-row">
+                  <span>{{ entry.label }}</span><strong>{{ entry.value }}</strong>
+                </div>
+              </div>
+              <div v-else class="panel-empty">暂无执行报告</div>
+            </div>
+          </section>
+        </v-window-item>
+      </v-window>
     </template>
 
     <v-dialog v-model="deleteDialog.show" max-width="680" persistent>
@@ -331,6 +406,7 @@ const pluginId = DIRECTORY_FILE_SEARCH_PLUGIN_ID
 const initialLoading = ref(true)
 const refreshing = ref(false)
 const resultsLoading = ref(false)
+const activeView = ref('results')
 const searchInput = ref('')
 const results = ref([])
 const currentPage = ref(1)
@@ -436,6 +512,12 @@ const statusLabel = computed(() => {
   if (taskBusy.value) return '任务执行中'
   return '空闲'
 })
+const reportEntries = computed(() => Object.entries(state.last_report || {}).map(
+  ([label, value]) => ({
+    label,
+    value: typeof value === 'object' ? JSON.stringify(value) : String(value ?? '-'),
+  }),
+))
 
 const normalizeSuccess = (result) => {
   if (!result || typeof result !== 'object') return false
@@ -703,96 +785,31 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.file-search-page,
+.plugin-workbench,
 .delete-dialog {
-  --dfs-surface: #ffffff;
-  --dfs-subtle: #f3f4f6;
-  --dfs-hover: #f8fafc;
-  --dfs-text: #1f2937;
-  --dfs-muted: #4b5563;
-  --dfs-border: #d1d5db;
-  --dfs-border-soft: #e5e7eb;
-  --dfs-accent: #2563eb;
-  --dfs-secondary: #0f766e;
-  --dfs-success: #15803d;
-  --dfs-warning: #a16207;
-  --dfs-danger: #b91c1c;
-  --dfs-info: #0369a1;
-  --dfs-success-soft: #f0fdf4;
-  --dfs-warning-soft: #fffbeb;
-  --dfs-danger-soft: #fef2f2;
-  --dfs-info-soft: #e0f2fe;
-  --dfs-disabled-bg: #e5e7eb;
-  --dfs-disabled-text: #374151;
-  --dfs-on-accent: #ffffff;
-  --v-theme-surface: 255, 255, 255;
-  --v-theme-on-surface: 31, 41, 55;
-  --v-theme-on-surface-variant: 75, 85, 99;
-  --v-theme-primary: 37, 99, 235;
-  --v-theme-on-primary: 255, 255, 255;
-  --v-theme-secondary: 15, 118, 110;
-  --v-theme-on-secondary: 255, 255, 255;
-  --v-theme-success: 21, 128, 61;
-  --v-theme-on-success: 255, 255, 255;
-  --v-theme-warning: 161, 98, 7;
-  --v-theme-on-warning: 255, 255, 255;
-  --v-theme-error: 185, 28, 28;
-  --v-theme-on-error: 255, 255, 255;
-  --v-theme-info: 3, 105, 161;
-  --v-theme-on-info: 255, 255, 255;
-  --v-border-color: 107, 114, 128;
-  --v-border-opacity: 0.38;
-  --v-high-emphasis-opacity: 1;
-  --v-medium-emphasis-opacity: 1;
-  --v-disabled-opacity: 1;
-  color-scheme: light;
+  --dfs-surface: rgb(var(--v-theme-surface));
+  --dfs-subtle: rgba(var(--v-theme-surface-variant), 0.28);
+  --dfs-hover: rgba(var(--v-theme-primary), 0.06);
+  --dfs-text: rgb(var(--v-theme-on-surface));
+  --dfs-muted: rgb(var(--v-theme-on-surface-variant));
+  --dfs-border: rgba(var(--v-border-color), var(--v-border-opacity));
+  --dfs-border-soft: rgba(var(--v-border-color), 0.18);
+  --dfs-accent: rgb(var(--v-theme-primary));
+  --dfs-secondary: rgb(var(--v-theme-secondary));
+  --dfs-success: rgb(var(--v-theme-success));
+  --dfs-warning: rgb(var(--v-theme-warning));
+  --dfs-danger: rgb(var(--v-theme-error));
+  --dfs-info: rgb(var(--v-theme-info));
+  --dfs-success-soft: rgba(var(--v-theme-success), 0.1);
+  --dfs-warning-soft: rgba(var(--v-theme-warning), 0.12);
+  --dfs-danger-soft: rgba(var(--v-theme-error), 0.1);
+  --dfs-info-soft: rgba(var(--v-theme-info), 0.1);
+  --dfs-disabled-bg: rgba(var(--v-theme-on-surface), 0.12);
+  --dfs-disabled-text: rgba(var(--v-theme-on-surface), 0.68);
+  --dfs-on-accent: rgb(var(--v-theme-on-primary));
 }
 
-:global(.v-theme--dark .file-search-page),
-:global(.v-theme--dark .delete-dialog),
-:global(.file-search-page.v-theme--dark),
-:global(.delete-dialog.v-theme--dark) {
-  --dfs-surface: #111827;
-  --dfs-subtle: #1f2937;
-  --dfs-hover: #1b2535;
-  --dfs-text: #f3f4f6;
-  --dfs-muted: #cbd5e1;
-  --dfs-border: #475569;
-  --dfs-border-soft: #334155;
-  --dfs-accent: #60a5fa;
-  --dfs-secondary: #5eead4;
-  --dfs-success: #4ade80;
-  --dfs-warning: #fbbf24;
-  --dfs-danger: #f87171;
-  --dfs-info: #38bdf8;
-  --dfs-success-soft: #052e16;
-  --dfs-warning-soft: #422006;
-  --dfs-danger-soft: #450a0a;
-  --dfs-info-soft: #082f49;
-  --dfs-disabled-bg: #273449;
-  --dfs-disabled-text: #cbd5e1;
-  --dfs-on-accent: #0f172a;
-  --v-theme-surface: 17, 24, 39;
-  --v-theme-on-surface: 243, 244, 246;
-  --v-theme-on-surface-variant: 203, 213, 225;
-  --v-theme-primary: 96, 165, 250;
-  --v-theme-on-primary: 15, 23, 42;
-  --v-theme-secondary: 94, 234, 212;
-  --v-theme-on-secondary: 15, 23, 42;
-  --v-theme-success: 74, 222, 128;
-  --v-theme-on-success: 15, 23, 42;
-  --v-theme-warning: 251, 191, 36;
-  --v-theme-on-warning: 15, 23, 42;
-  --v-theme-error: 248, 113, 113;
-  --v-theme-on-error: 15, 23, 42;
-  --v-theme-info: 56, 189, 248;
-  --v-theme-on-info: 15, 23, 42;
-  --v-border-color: 148, 163, 184;
-  --v-border-opacity: 0.38;
-  color-scheme: dark;
-}
-
-.file-search-page {
+.plugin-workbench {
   display: flex;
   min-height: min(720px, 90vh);
   flex-direction: column;
@@ -947,6 +964,14 @@ onBeforeUnmount(() => {
   gap: 2px;
 }
 
+.header-actions :deep(.v-btn),
+.search-toolbar :deep(.v-btn),
+.selection-actions :deep(.v-btn),
+.result-row :deep(.v-btn) {
+  min-width: 44px;
+  min-height: 44px;
+}
+
 .initial-loading,
 .inline-loading,
 .empty-state {
@@ -1077,6 +1102,101 @@ onBeforeUnmount(() => {
   font-size: 0.86rem !important;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.view-tabs {
+  flex: 0 0 auto;
+  padding: 0 8px;
+}
+
+.tab-count {
+  display: inline-flex;
+  min-width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 7px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: rgba(var(--v-theme-on-surface), 0.1);
+  font-size: 0.7rem;
+}
+
+.workbench-window {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+.status-view {
+  max-width: 760px;
+  padding: 22px 20px;
+}
+
+.section-heading,
+.detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.section-heading {
+  margin-bottom: 14px;
+}
+
+.section-meta,
+.panel-empty {
+  color: var(--dfs-muted);
+  font-size: 0.75rem;
+}
+
+.detail-row {
+  min-height: 42px;
+  border-bottom: 1px solid var(--dfs-border-soft);
+  font-size: 0.78rem;
+}
+
+.detail-row span {
+  color: var(--dfs-muted);
+}
+
+.detail-row strong {
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.status-view :deep(.v-alert) {
+  margin-top: 16px;
+}
+
+.activity-view {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-height: 360px;
+}
+
+.activity-panel {
+  min-width: 0;
+  padding: 20px;
+}
+
+.activity-panel + .activity-panel {
+  border-left: 1px solid var(--dfs-border);
+}
+
+.log-list {
+  display: flex;
+  max-height: 520px;
+  overflow-y: auto;
+  flex-direction: column-reverse;
+}
+
+.log-list code {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--dfs-border-soft);
+  overflow-wrap: anywhere;
+  font-size: 0.72rem;
 }
 
 .results-area {
@@ -1357,9 +1477,28 @@ onBeforeUnmount(() => {
     padding-left: 16px;
   }
 
+  .activity-view {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .activity-panel + .activity-panel {
+    border-top: 1px solid var(--dfs-border);
+    border-left: 0;
+  }
+
   .preview-list > div {
     grid-template-columns: minmax(0, 1fr);
     gap: 4px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plugin-workbench *,
+  .plugin-workbench *::before,
+  .plugin-workbench *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
   }
 }
 </style>

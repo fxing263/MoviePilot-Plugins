@@ -1,11 +1,11 @@
 <template>
-  <div class="file-search-config">
+  <div class="plugin-config file-search-config">
     <header class="config-header">
       <div>
         <div class="text-h6">目录文件搜索删除</div>
         <div class="config-subtitle">插件设置</div>
       </div>
-      <v-btn icon="mdi-close" variant="text" size="small" title="关闭" @click="emit('close')" />
+      <v-btn icon="mdi-close" variant="text" size="small" title="关闭" aria-label="关闭插件设置" @click="emit('close')" />
     </header>
 
     <v-divider />
@@ -40,6 +40,7 @@
           :error-messages="rootError"
           hide-details="auto"
         />
+        <p class="field-help">填写要递归搜索的绝对目录。页面只展示该目录内的普通文件，删除前仍会校验路径和文件快照。</p>
       </section>
     </main>
 
@@ -112,59 +113,24 @@ watch(
 </script>
 
 <style scoped>
-.file-search-config {
-  --dfs-surface: #ffffff;
-  --dfs-text: #1f2937;
-  --dfs-muted: #4b5563;
-  --dfs-border: #d1d5db;
-  --dfs-accent: #2563eb;
-  --dfs-success: #15803d;
-  --dfs-disabled-bg: #e5e7eb;
-  --dfs-disabled-text: #374151;
-  --dfs-on-accent: #ffffff;
-  --v-theme-surface: 255, 255, 255;
-  --v-theme-on-surface: 31, 41, 55;
-  --v-theme-on-surface-variant: 75, 85, 99;
-  --v-theme-primary: 37, 99, 235;
-  --v-theme-on-primary: 255, 255, 255;
-  --v-theme-success: 21, 128, 61;
-  --v-theme-on-success: 255, 255, 255;
-  --v-border-color: 107, 114, 128;
-  --v-border-opacity: 0.38;
-  --v-high-emphasis-opacity: 1;
-  --v-medium-emphasis-opacity: 1;
-  --v-disabled-opacity: 1;
+.plugin-config {
+  --dfs-surface: rgb(var(--v-theme-surface));
+  --dfs-text: rgb(var(--v-theme-on-surface));
+  --dfs-muted: rgb(var(--v-theme-on-surface-variant));
+  --dfs-border: rgba(var(--v-border-color), var(--v-border-opacity));
+  --dfs-accent: rgb(var(--v-theme-primary));
+  --dfs-success: rgb(var(--v-theme-success));
+  --dfs-disabled-bg: rgba(var(--v-theme-on-surface), 0.12);
+  --dfs-disabled-text: rgba(var(--v-theme-on-surface), 0.68);
+  --dfs-on-accent: rgb(var(--v-theme-on-primary));
   display: flex;
-  height: min(560px, 88vh);
-  min-height: 420px;
+  min-height: min(560px, 88vh);
+  max-height: 92vh;
   flex-direction: column;
+  overflow: hidden;
   background: var(--dfs-surface);
   color: var(--dfs-text);
-  color-scheme: light;
   letter-spacing: 0;
-}
-
-:global(.v-theme--dark .file-search-config),
-:global(.file-search-config.v-theme--dark) {
-  --dfs-surface: #111827;
-  --dfs-text: #f3f4f6;
-  --dfs-muted: #cbd5e1;
-  --dfs-border: #475569;
-  --dfs-accent: #60a5fa;
-  --dfs-success: #4ade80;
-  --dfs-disabled-bg: #273449;
-  --dfs-disabled-text: #cbd5e1;
-  --dfs-on-accent: #0f172a;
-  --v-theme-surface: 17, 24, 39;
-  --v-theme-on-surface: 243, 244, 246;
-  --v-theme-on-surface-variant: 203, 213, 225;
-  --v-theme-primary: 96, 165, 250;
-  --v-theme-on-primary: 15, 23, 42;
-  --v-theme-success: 74, 222, 128;
-  --v-theme-on-success: 15, 23, 42;
-  --v-border-color: 148, 163, 184;
-  --v-border-opacity: 0.38;
-  color-scheme: dark;
 }
 
 .file-search-config :deep(.v-label),
@@ -248,8 +214,20 @@ watch(
   border-top: 1px solid var(--dfs-border);
 }
 
+.config-header :deep(.v-btn),
+.config-actions :deep(.v-btn) {
+  min-height: 44px;
+}
+
+.field-help {
+  margin: 8px 0 0;
+  color: rgba(var(--v-theme-on-surface), 0.72);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
 @media (max-width: 700px) {
-  .file-search-config {
+  .plugin-config {
     height: 100vh;
     min-height: 0;
   }
@@ -259,6 +237,15 @@ watch(
   .config-actions {
     padding-right: 16px;
     padding-left: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plugin-config *,
+  .plugin-config *::before,
+  .plugin-config *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
   }
 }
 </style>

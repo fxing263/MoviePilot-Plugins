@@ -1,5 +1,5 @@
 <template>
-  <div class="sync-console">
+  <div class="plugin-workbench sync-console">
     <header class="console-header">
       <div class="identity-block">
         <div class="identity-row">
@@ -20,11 +20,12 @@
           variant="text"
           size="small"
           title="刷新"
+          aria-label="刷新插件状态"
           :loading="refreshing"
           @click="refreshAll"
         />
-        <v-btn icon="mdi-cog" variant="text" size="small" title="设置" @click="emit('switch')" />
-        <v-btn icon="mdi-close" variant="text" size="small" title="关闭" @click="emit('close')" />
+        <v-btn icon="mdi-cog" variant="text" size="small" title="设置" aria-label="打开插件设置" @click="emit('switch')" />
+        <v-btn icon="mdi-close" variant="text" size="small" title="关闭" aria-label="关闭插件页面" @click="emit('close')" />
       </div>
     </header>
 
@@ -36,10 +37,14 @@
     </div>
 
     <template v-else>
-      <div v-if="taskBusy || state.last_error" class="task-banner" :class="statusTone">
+      <div class="task-banner" :class="statusTone" aria-live="polite" aria-atomic="true">
         <v-progress-circular v-if="taskBusy" indeterminate size="18" width="2" />
-        <v-icon v-else icon="mdi-alert-circle-outline" size="20" />
-        <span>{{ state.last_error || state.task_message }}</span>
+        <v-icon
+          v-else
+          :icon="state.last_error ? 'mdi-alert-circle-outline' : 'mdi-information-outline'"
+          size="20"
+        />
+        <span>{{ state.last_error || state.task_message || taskLabel }}</span>
       </div>
 
       <v-tabs v-model="activeView" class="view-tabs" color="primary" show-arrows>
@@ -113,7 +118,7 @@
                 <v-btn
                   v-if="state.monitoring"
                   color="warning"
-                  variant="tonal"
+                  variant="text"
                   prepend-icon="mdi-stop"
                   :loading="activeAction === 'monitor-stop'"
                   :disabled="!!activeAction"
@@ -124,7 +129,7 @@
                 <v-btn
                   v-else
                   color="success"
-                  variant="tonal"
+                  variant="text"
                   prepend-icon="mdi-play"
                   :loading="activeAction === 'monitor-start'"
                   :disabled="monitorStartDisabled"
@@ -754,100 +759,32 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.sync-console,
+.plugin-workbench,
 .delete-dialog {
-  --mms-surface: #ffffff;
-  --mms-subtle: #f3f4f6;
-  --mms-hover: #f8fafc;
-  --mms-text: #1f2937;
-  --mms-muted: #4b5563;
-  --mms-border: #d1d5db;
-  --mms-border-soft: #e5e7eb;
-  --mms-accent: #2563eb;
-  --mms-secondary: #0f766e;
-  --mms-success: #15803d;
-  --mms-warning: #a16207;
-  --mms-danger: #b91c1c;
-  --mms-info: #0369a1;
-  --mms-chip-bg: #e5e7eb;
-  --mms-info-soft: #e0f2fe;
-  --mms-success-soft: #f0fdf4;
-  --mms-warning-soft: #fffbeb;
-  --mms-danger-soft: #fef2f2;
-  --mms-disabled-bg: #e5e7eb;
-  --mms-disabled-text: #374151;
-  --mms-on-accent: #ffffff;
-  --v-theme-surface: 255, 255, 255;
-  --v-theme-surface-variant: 243, 244, 246;
-  --v-theme-on-surface: 31, 41, 55;
-  --v-theme-on-surface-variant: 75, 85, 99;
-  --v-theme-primary: 37, 99, 235;
-  --v-theme-on-primary: 255, 255, 255;
-  --v-theme-secondary: 15, 118, 110;
-  --v-theme-on-secondary: 255, 255, 255;
-  --v-theme-success: 21, 128, 61;
-  --v-theme-on-success: 255, 255, 255;
-  --v-theme-warning: 161, 98, 7;
-  --v-theme-on-warning: 255, 255, 255;
-  --v-theme-error: 185, 28, 28;
-  --v-theme-on-error: 255, 255, 255;
-  --v-theme-info: 3, 105, 161;
-  --v-theme-on-info: 255, 255, 255;
-  --v-border-color: 107, 114, 128;
-  --v-border-opacity: 0.38;
-  --v-high-emphasis-opacity: 1;
-  --v-medium-emphasis-opacity: 1;
-  --v-disabled-opacity: 1;
-  color-scheme: light;
+  --mms-surface: rgb(var(--v-theme-surface));
+  --mms-subtle: rgba(var(--v-theme-surface-variant), 0.28);
+  --mms-hover: rgba(var(--v-theme-primary), 0.06);
+  --mms-text: rgb(var(--v-theme-on-surface));
+  --mms-muted: rgb(var(--v-theme-on-surface-variant));
+  --mms-border: rgba(var(--v-border-color), var(--v-border-opacity));
+  --mms-border-soft: rgba(var(--v-border-color), 0.18);
+  --mms-accent: rgb(var(--v-theme-primary));
+  --mms-secondary: rgb(var(--v-theme-secondary));
+  --mms-success: rgb(var(--v-theme-success));
+  --mms-warning: rgb(var(--v-theme-warning));
+  --mms-danger: rgb(var(--v-theme-error));
+  --mms-info: rgb(var(--v-theme-info));
+  --mms-chip-bg: rgba(var(--v-theme-on-surface), 0.1);
+  --mms-info-soft: rgba(var(--v-theme-info), 0.1);
+  --mms-success-soft: rgba(var(--v-theme-success), 0.1);
+  --mms-warning-soft: rgba(var(--v-theme-warning), 0.12);
+  --mms-danger-soft: rgba(var(--v-theme-error), 0.1);
+  --mms-disabled-bg: rgba(var(--v-theme-on-surface), 0.12);
+  --mms-disabled-text: rgba(var(--v-theme-on-surface), 0.68);
+  --mms-on-accent: rgb(var(--v-theme-on-primary));
 }
 
-:global(.v-theme--dark .sync-console),
-:global(.v-theme--dark .delete-dialog),
-:global(.sync-console.v-theme--dark),
-:global(.delete-dialog.v-theme--dark) {
-  --mms-surface: #111827;
-  --mms-subtle: #1f2937;
-  --mms-hover: #1b2535;
-  --mms-text: #f3f4f6;
-  --mms-muted: #cbd5e1;
-  --mms-border: #475569;
-  --mms-border-soft: #334155;
-  --mms-accent: #60a5fa;
-  --mms-secondary: #5eead4;
-  --mms-success: #4ade80;
-  --mms-warning: #fbbf24;
-  --mms-danger: #f87171;
-  --mms-info: #38bdf8;
-  --mms-chip-bg: #334155;
-  --mms-info-soft: #082f49;
-  --mms-success-soft: #052e16;
-  --mms-warning-soft: #422006;
-  --mms-danger-soft: #450a0a;
-  --mms-disabled-bg: #273449;
-  --mms-disabled-text: #cbd5e1;
-  --mms-on-accent: #0f172a;
-  --v-theme-surface: 17, 24, 39;
-  --v-theme-surface-variant: 31, 41, 55;
-  --v-theme-on-surface: 243, 244, 246;
-  --v-theme-on-surface-variant: 203, 213, 225;
-  --v-theme-primary: 96, 165, 250;
-  --v-theme-on-primary: 15, 23, 42;
-  --v-theme-secondary: 94, 234, 212;
-  --v-theme-on-secondary: 15, 23, 42;
-  --v-theme-success: 74, 222, 128;
-  --v-theme-on-success: 15, 23, 42;
-  --v-theme-warning: 251, 191, 36;
-  --v-theme-on-warning: 15, 23, 42;
-  --v-theme-error: 248, 113, 113;
-  --v-theme-on-error: 15, 23, 42;
-  --v-theme-info: 56, 189, 248;
-  --v-theme-on-info: 15, 23, 42;
-  --v-border-color: 148, 163, 184;
-  --v-border-opacity: 0.38;
-  color-scheme: dark;
-}
-
-.sync-console {
+.plugin-workbench {
   display: flex;
   min-height: min(780px, 92vh);
   flex-direction: column;
@@ -1026,6 +963,14 @@ onBeforeUnmount(() => {
 .header-actions {
   flex: 0 0 auto;
   gap: 2px;
+}
+
+.header-actions :deep(.v-btn),
+.command-grid :deep(.v-btn),
+.missing-tools :deep(.v-btn),
+.missing-row :deep(.v-btn) {
+  min-width: 44px;
+  min-height: 44px;
 }
 
 .initial-loading,
@@ -1512,5 +1457,15 @@ onBeforeUnmount(() => {
   .activity-grid { min-height: 0; }
 
   .dialog-content { max-height: 68vh; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plugin-workbench *,
+  .plugin-workbench *::before,
+  .plugin-workbench *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }
 </style>

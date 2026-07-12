@@ -1,5 +1,5 @@
 <template>
-  <div class="organizer-page">
+  <div class="plugin-workbench organizer-page">
     <header class="page-header">
       <div class="title-block">
         <div class="text-h6">Emby媒体库整理</div>
@@ -15,11 +15,12 @@
           variant="text"
           size="small"
           title="刷新"
+          aria-label="刷新插件状态"
           :loading="refreshing"
           @click="loadState"
         />
-        <v-btn icon="mdi-cog" variant="text" size="small" title="设置" @click="emit('switch')" />
-        <v-btn icon="mdi-close" variant="text" size="small" title="关闭" @click="emit('close')" />
+        <v-btn icon="mdi-cog" variant="text" size="small" title="设置" aria-label="打开插件设置" @click="emit('switch')" />
+        <v-btn icon="mdi-close" variant="text" size="small" title="关闭" aria-label="关闭插件页面" @click="emit('close')" />
       </div>
     </header>
 
@@ -31,70 +32,22 @@
     </div>
 
     <template v-else>
-      <section class="scan-band">
-        <div class="scan-row">
-          <div class="scan-copy">
-            <div class="text-subtitle-2">多余元数据分类</div>
-            <v-select
-              :model-value="orphanCategorySelection"
-              :items="state.categories"
-              item-title="title"
-              item-value="value"
-              label="选择二级分类"
-              variant="outlined"
-              density="compact"
-              multiple
-              chips
-              closable-chips
-              hide-details
-              class="scan-select"
-              @update:model-value="updateCategorySelection('orphan', $event)"
-            />
-          </div>
-          <v-btn
-            color="primary"
-            prepend-icon="mdi-file-search-outline"
-            :disabled="scanRunning || !orphanCategorySelection.length"
-            @click="startScan('orphan')"
-          >
-            扫描多余元数据
-          </v-btn>
-        </div>
-        <div class="scan-row">
-          <div class="scan-copy">
-            <div class="text-subtitle-2">缺失元数据分类</div>
-            <v-select
-              :model-value="missingCategorySelection"
-              :items="state.categories"
-              item-title="title"
-              item-value="value"
-              label="选择二级分类"
-              variant="outlined"
-              density="compact"
-              multiple
-              chips
-              closable-chips
-              hide-details
-              class="scan-select"
-              @update:model-value="updateCategorySelection('missing', $event)"
-            />
-          </div>
-          <v-btn
-            color="primary"
-            prepend-icon="mdi-database-search-outline"
-            :disabled="scanRunning || !missingCategorySelection.length"
-            @click="startScan('missing')"
-          >
-            查询缺失元数据
-          </v-btn>
-        </div>
-      </section>
-
-      <div v-if="scanRunning || state.status === 'failed'" class="task-strip" :class="statusTone">
+      <div class="task-strip" :class="statusTone" aria-live="polite" aria-atomic="true">
         <v-progress-circular v-if="scanRunning" indeterminate size="18" width="2" />
-        <v-icon v-else icon="mdi-alert-circle-outline" size="20" />
+        <v-icon
+          v-else
+          :icon="state.status === 'failed' ? 'mdi-alert-circle-outline' : 'mdi-information-outline'"
+          size="20"
+        />
         <span>{{ state.last_error || state.task_message || statusText }}</span>
       </div>
+
+      <section class="metric-grid" aria-label="媒体库整理概览">
+        <div class="metric-cell"><strong>{{ state.missing.total }}</strong><span>缺失元数据</span></div>
+        <div class="metric-cell"><strong>{{ state.orphan.total }}</strong><span>多余元数据</span></div>
+        <div class="metric-cell"><strong>{{ state.categories.length }}</strong><span>可用分类</span></div>
+        <div class="metric-cell"><strong>{{ formatShortTime(state.scan_finished_at) || '-' }}</strong><span>完成时间</span></div>
+      </section>
 
       <v-tabs v-model="activeTab" class="result-tabs" color="primary">
         <v-tab value="missing">缺失元数据 <span class="tab-count">{{ state.missing.total }}</span></v-tab>
@@ -105,6 +58,35 @@
 
       <v-window v-model="activeTab" class="result-window">
         <v-window-item value="missing">
+          <div class="scan-row">
+            <div class="scan-copy">
+              <div class="text-subtitle-2">缺失元数据扫描范围</div>
+              <v-select
+                :model-value="missingCategorySelection"
+                :items="state.categories"
+                item-title="title"
+                item-value="value"
+                label="选择二级分类"
+                variant="outlined"
+                density="compact"
+                multiple
+                chips
+                closable-chips
+                hide-details
+                class="scan-select"
+                @update:model-value="updateCategorySelection('missing', $event)"
+              />
+            </div>
+            <v-btn
+              color="primary"
+              prepend-icon="mdi-database-search-outline"
+              :loading="scanRunning && state.scan_kind === 'missing'"
+              :disabled="scanRunning || !missingCategorySelection.length"
+              @click="startScan('missing')"
+            >
+              查询缺失元数据
+            </v-btn>
+          </div>
           <div v-if="!state.missing.items.length" class="empty-state">
             <v-icon icon="mdi-file-check-outline" size="34" />
             <span>暂无缺失元数据结果</span>
@@ -195,6 +177,35 @@
         </v-window-item>
 
         <v-window-item value="orphan">
+          <div class="scan-row">
+            <div class="scan-copy">
+              <div class="text-subtitle-2">多余元数据扫描范围</div>
+              <v-select
+                :model-value="orphanCategorySelection"
+                :items="state.categories"
+                item-title="title"
+                item-value="value"
+                label="选择二级分类"
+                variant="outlined"
+                density="compact"
+                multiple
+                chips
+                closable-chips
+                hide-details
+                class="scan-select"
+                @update:model-value="updateCategorySelection('orphan', $event)"
+              />
+            </div>
+            <v-btn
+              color="primary"
+              prepend-icon="mdi-file-search-outline"
+              :loading="scanRunning && state.scan_kind === 'orphan'"
+              :disabled="scanRunning || !orphanCategorySelection.length"
+              @click="startScan('orphan')"
+            >
+              扫描多余元数据
+            </v-btn>
+          </div>
           <div v-if="state.orphan.total" class="orphan-toolbar">
             <span class="text-body-2 text-medium-emphasis">
               已选择 {{ selectedOrphanPaths.length }} 项，共 {{ state.orphan.total }} 个文件
@@ -447,6 +458,13 @@ const formatTime = (value) => {
   return value.replace('T', ' ')
 }
 
+const formatShortTime = (value) => {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value).replace('T', ' ').slice(11, 16)
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
 const stateUrl = () => {
   const query = new URLSearchParams({
     missing_page: String(missingPage.value),
@@ -691,9 +709,14 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.organizer-page {
-  min-height: min(760px, 90vh);
+.plugin-workbench {
+  display: flex;
+  min-height: min(760px, 92vh);
+  flex-direction: column;
+  overflow: hidden;
   background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+  letter-spacing: 0;
 }
 
 .page-header,
@@ -738,19 +761,14 @@ onBeforeUnmount(() => {
 .status-dot.error { background: rgb(var(--v-theme-error)); }
 .status-dot.muted { background: rgb(var(--v-theme-on-surface-variant)); }
 
-.scan-band {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  background: rgba(var(--v-theme-surface-variant), 0.22);
-}
-
 .scan-row {
-  min-height: 82px;
+  min-height: 74px;
   min-width: 0;
-}
-
-.scan-row + .scan-row {
-  border-left: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 6px;
+  background: rgba(var(--v-theme-surface-variant), 0.16);
 }
 
 .scan-copy {
@@ -766,10 +784,44 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 10px 22px;
+  min-height: 42px;
+  padding: 9px 22px;
   font-size: 0.86rem;
   color: rgb(var(--v-theme-info));
   background: rgba(var(--v-theme-info), 0.08);
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  background: rgba(var(--v-theme-surface-variant), 0.1);
+}
+
+.metric-cell {
+  min-width: 0;
+  padding: 12px 18px;
+  border-inline-end: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.metric-cell:last-child {
+  border-inline-end: 0;
+}
+
+.metric-cell strong,
+.metric-cell span {
+  display: block;
+}
+
+.metric-cell strong {
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-cell span {
+  margin-top: 2px;
+  color: rgb(var(--v-theme-on-surface-variant));
+  font-size: 0.75rem;
 }
 
 .task-strip.error {
@@ -861,6 +913,13 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
 }
 
+.header-actions :deep(.v-btn),
+.episode-actions :deep(.v-btn),
+.orphan-row :deep(.v-btn) {
+  min-width: 44px;
+  min-height: 44px;
+}
+
 .orphan-head,
 .orphan-row {
   grid-template-columns: 36px minmax(130px, 0.7fr) minmax(220px, 1.5fr) minmax(72px, 0.4fr) 40px;
@@ -917,15 +976,6 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 1100px) {
-  .scan-band {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .scan-row + .scan-row {
-    border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-    border-left: 0;
-  }
-
   .episode-row {
     grid-template-columns: minmax(0, 1fr);
     padding: 10px 0;
@@ -936,7 +986,19 @@ onBeforeUnmount(() => {
   }
 }
 
-@media (max-width: 700px) {
+@media (max-width: 760px) {
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metric-cell:nth-child(2) {
+    border-inline-end: 0;
+  }
+
+  .metric-cell:nth-child(-n + 2) {
+    border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  }
+
   .page-header,
   .scan-row {
     padding-right: 16px;
@@ -965,6 +1027,7 @@ onBeforeUnmount(() => {
 
   .scan-row > .v-btn {
     width: 100%;
+    min-height: 44px;
   }
 
   .result-window {
@@ -1035,6 +1098,16 @@ onBeforeUnmount(() => {
   .orphan-row > .v-btn {
     grid-column: 4;
     grid-row: 1 / 3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plugin-workbench *,
+  .plugin-workbench *::before,
+  .plugin-workbench *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
   }
 }
 </style>

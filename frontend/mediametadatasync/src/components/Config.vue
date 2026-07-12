@@ -1,5 +1,5 @@
 <template>
-  <div class="config-page">
+  <div class="plugin-config config-page">
     <header class="config-header">
       <div class="header-copy">
         <div class="text-h6">媒体元数据双目录同步</div>
@@ -10,6 +10,7 @@
         variant="text"
         size="small"
         title="关闭"
+        aria-label="关闭插件设置"
         @click="emit('close')"
       />
     </header>
@@ -60,6 +61,7 @@
             label="源目录"
             prepend-inner-icon="mdi-folder-arrow-right-outline"
             variant="outlined"
+            :error-messages="sourceError"
             hide-details="auto"
           />
           <v-text-field
@@ -67,9 +69,11 @@
             label="目标目录"
             prepend-inner-icon="mdi-folder-arrow-left-right-outline"
             variant="outlined"
+            :error-messages="targetError"
             hide-details="auto"
           />
         </div>
+        <p class="field-help">源目录用于读取 9kg 元数据，目标目录用于番号系列镜像；启用插件后两者都必须配置。</p>
       </section>
 
       <v-divider />
@@ -104,6 +108,7 @@
         <v-alert type="warning" variant="tonal" density="compact" class="delete-alert">
           网盘路径必须位于上述挂载根目录；三端删除始终需要预览和二次确认。
         </v-alert>
+        <p class="field-help">每行填写一个允许的网盘挂载根目录，删除预览不会接受越界路径。</p>
       </section>
 
       <v-divider />
@@ -146,12 +151,13 @@
           hide-details="auto"
           class="extension-field"
         />
+        <p class="field-help">扩展名可直接输入，保存时会统一为小写并自动补全开头的点号。</p>
       </section>
     </main>
 
     <footer class="config-actions">
       <v-btn variant="text" @click="emit('close')">取消</v-btn>
-      <v-btn color="primary" prepend-icon="mdi-content-save" @click="saveConfig">
+      <v-btn color="primary" prepend-icon="mdi-content-save" :disabled="saveDisabled" @click="saveConfig">
         保存
       </v-btn>
     </footer>
@@ -159,7 +165,7 @@
 </template>
 
 <script setup>
-import { reactive, watch } from 'vue'
+import { computed, reactive, watch } from 'vue'
 
 const props = defineProps({
   api: {
@@ -185,6 +191,17 @@ const defaultExtensions = [
 ]
 const extensionOptions = [...defaultExtensions]
 const config = reactive({})
+const sourceError = computed(() => (
+  config.enabled && !String(config.source_dir || '').trim()
+    ? ['启用插件后必须配置源目录']
+    : []
+))
+const targetError = computed(() => (
+  config.enabled && !String(config.target_dir || '').trim()
+    ? ['启用插件后必须配置目标目录']
+    : []
+))
+const saveDisabled = computed(() => sourceError.value.length > 0 || targetError.value.length > 0)
 
 const normalizeBoolean = (value, fallback) => {
   if (typeof value === 'boolean') return value
@@ -261,87 +278,29 @@ watch(
 </script>
 
 <style scoped>
-.config-page {
-  --mms-surface: #ffffff;
-  --mms-text: #1f2937;
-  --mms-muted: #4b5563;
-  --mms-border: #d1d5db;
-  --mms-disabled-bg: #e5e7eb;
-  --mms-disabled-text: #374151;
-  --mms-accent: #2563eb;
-  --mms-secondary: #0f766e;
-  --mms-success: #15803d;
-  --mms-warning: #a16207;
-  --mms-danger: #b91c1c;
-  --mms-info: #0369a1;
-  --mms-warning-soft: #fffbeb;
-  --mms-on-accent: #ffffff;
-  --v-theme-surface: 255, 255, 255;
-  --v-theme-surface-variant: 243, 244, 246;
-  --v-theme-on-surface: 31, 41, 55;
-  --v-theme-on-surface-variant: 75, 85, 99;
-  --v-theme-primary: 37, 99, 235;
-  --v-theme-on-primary: 255, 255, 255;
-  --v-theme-secondary: 15, 118, 110;
-  --v-theme-on-secondary: 255, 255, 255;
-  --v-theme-success: 21, 128, 61;
-  --v-theme-on-success: 255, 255, 255;
-  --v-theme-warning: 161, 98, 7;
-  --v-theme-on-warning: 255, 255, 255;
-  --v-theme-error: 185, 28, 28;
-  --v-theme-on-error: 255, 255, 255;
-  --v-theme-info: 3, 105, 161;
-  --v-theme-on-info: 255, 255, 255;
-  --v-border-color: 107, 114, 128;
-  --v-border-opacity: 0.38;
-  --v-high-emphasis-opacity: 1;
-  --v-medium-emphasis-opacity: 1;
-  --v-disabled-opacity: 1;
+.plugin-config {
+  --mms-surface: rgb(var(--v-theme-surface));
+  --mms-text: rgb(var(--v-theme-on-surface));
+  --mms-muted: rgb(var(--v-theme-on-surface-variant));
+  --mms-border: rgba(var(--v-border-color), var(--v-border-opacity));
+  --mms-disabled-bg: rgba(var(--v-theme-on-surface), 0.12);
+  --mms-disabled-text: rgba(var(--v-theme-on-surface), 0.68);
+  --mms-accent: rgb(var(--v-theme-primary));
+  --mms-secondary: rgb(var(--v-theme-secondary));
+  --mms-success: rgb(var(--v-theme-success));
+  --mms-warning: rgb(var(--v-theme-warning));
+  --mms-danger: rgb(var(--v-theme-error));
+  --mms-info: rgb(var(--v-theme-info));
+  --mms-warning-soft: rgba(var(--v-theme-warning), 0.12);
+  --mms-on-accent: rgb(var(--v-theme-on-primary));
   display: flex;
-  height: min(720px, 90vh);
-  min-height: 540px;
+  min-height: min(560px, 88vh);
+  max-height: 92vh;
   flex-direction: column;
+  overflow: hidden;
   background: var(--mms-surface);
   color: var(--mms-text);
-  color-scheme: light;
   letter-spacing: 0;
-}
-
-:global(.v-theme--dark .config-page),
-:global(.config-page.v-theme--dark) {
-  --mms-surface: #111827;
-  --mms-text: #f3f4f6;
-  --mms-muted: #cbd5e1;
-  --mms-border: #475569;
-  --mms-disabled-bg: #273449;
-  --mms-disabled-text: #cbd5e1;
-  --mms-accent: #60a5fa;
-  --mms-secondary: #5eead4;
-  --mms-success: #4ade80;
-  --mms-warning: #fbbf24;
-  --mms-danger: #f87171;
-  --mms-info: #38bdf8;
-  --mms-warning-soft: #422006;
-  --mms-on-accent: #0f172a;
-  --v-theme-surface: 17, 24, 39;
-  --v-theme-surface-variant: 31, 41, 55;
-  --v-theme-on-surface: 243, 244, 246;
-  --v-theme-on-surface-variant: 203, 213, 225;
-  --v-theme-primary: 96, 165, 250;
-  --v-theme-on-primary: 15, 23, 42;
-  --v-theme-secondary: 94, 234, 212;
-  --v-theme-on-secondary: 15, 23, 42;
-  --v-theme-success: 74, 222, 128;
-  --v-theme-on-success: 15, 23, 42;
-  --v-theme-warning: 251, 191, 36;
-  --v-theme-on-warning: 15, 23, 42;
-  --v-theme-error: 248, 113, 113;
-  --v-theme-on-error: 15, 23, 42;
-  --v-theme-info: 56, 189, 248;
-  --v-theme-on-info: 15, 23, 42;
-  --v-border-color: 148, 163, 184;
-  --v-border-opacity: 0.38;
-  color-scheme: dark;
 }
 
 .config-page :deep(.text-medium-emphasis),
@@ -397,6 +356,18 @@ watch(
   justify-content: space-between;
   gap: 16px;
   padding: 18px 22px;
+}
+
+.config-header :deep(.v-btn),
+.config-actions :deep(.v-btn) {
+  min-height: 44px;
+}
+
+.field-help {
+  margin: 8px 0 0;
+  color: rgba(var(--v-theme-on-surface), 0.72);
+  font-size: 0.8125rem;
+  line-height: 1.5;
 }
 
 .header-copy {
@@ -460,7 +431,7 @@ watch(
 }
 
 @media (max-width: 760px) {
-  .config-page {
+  .plugin-config {
     height: 100vh;
     min-height: 0;
   }
@@ -477,6 +448,15 @@ watch(
   .config-actions {
     padding-right: 16px;
     padding-left: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plugin-config *,
+  .plugin-config *::before,
+  .plugin-config *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
   }
 }
 </style>

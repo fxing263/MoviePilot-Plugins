@@ -25,7 +25,7 @@
 **文件：**
 - 创建：`tests/v2/test_plugin_frontend_workbench.py`
 
-- [ ] **步骤 1：编写失败的主页面与配置页合同测试**
+- [x] **步骤 1：编写失败的主页面与配置页合同测试**
 
 ```python
 from pathlib import Path
@@ -82,13 +82,13 @@ def test_plugin_config_uses_shared_form_contract(plugin_id: str) -> None:
     assert "@media (prefers-reduced-motion: reduce)" in source
 ```
 
-- [ ] **步骤 2：运行测试并确认因统一合同尚未实现而失败**
+- [x] **步骤 2：运行测试并确认因统一合同尚未实现而失败**
 
 运行：`pytest tests/v2/test_plugin_frontend_workbench.py -v`
 
 预期：3 个参数化主页面用例和 3 个配置页用例中至少一个断言失败，首个失败包含 `class="plugin-workbench` 或 `class="plugin-config`。
 
-- [ ] **步骤 3：提交测试红灯**
+- [x] **步骤 3：提交测试红灯**
 
 ```bash
 git add tests/v2/test_plugin_frontend_workbench.py
@@ -100,7 +100,7 @@ git commit -m "test: 添加三插件工作台界面合同"
 **文件：**
 - 修改：`frontend/embylibraryorganizer/src/components/Page.vue`
 
-- [ ] **步骤 1：实现统一页头、状态反馈和指标状态带**
+- [x] **步骤 1：实现统一页头、状态反馈和指标状态带**
 
 将根节点改为 `class="plugin-workbench organizer-page"`。三个页头图标按钮分别加入：
 
@@ -138,11 +138,11 @@ aria-label="关闭插件页面"
 
 新增 `formatShortTime`，复用现有日期解析规则并只返回本地化时分值。
 
-- [ ] **步骤 2：把扫描范围移入对应标签工具栏**
+- [x] **步骤 2：把扫描范围移入对应标签工具栏**
 
 删除页面顶部同时展示的两条 `scan-row`。在 `missing` 标签内放置缺失分类选择和“查询缺失元数据”主按钮，在 `orphan` 标签内放置多余分类选择和“扫描多余元数据”主按钮；保留原有 `updateCategorySelection`、`startScan`、禁用条件和选择值，不修改 API 调用。
 
-- [ ] **步骤 3：加入统一工作台 CSS 合同**
+- [x] **步骤 3：加入统一工作台 CSS 合同**
 
 在局部样式中加入并应用以下规则：
 
@@ -197,7 +197,7 @@ aria-label="关闭插件页面"
 }
 ```
 
-- [ ] **步骤 4：运行合同测试并确认 Emby 用例转绿**
+- [x] **步骤 4：运行合同测试并确认 Emby 用例转绿**
 
 运行：`pytest tests/v2/test_plugin_frontend_workbench.py -v`
 
@@ -208,15 +208,15 @@ aria-label="关闭插件页面"
 **文件：**
 - 修改：`frontend/mediametadatasync/src/components/Page.vue`
 
-- [ ] **步骤 1：统一壳层和可访问名称**
+- [x] **步骤 1：统一壳层和可访问名称**
 
 根节点改为 `class="plugin-workbench sync-console"`。页头三个图标按钮使用与任务 2 相同的 aria-label；任务横幅加入 `aria-live="polite" aria-atomic="true"`。保留现有 `v-tabs`、状态派生值、轮询和 API 调用。
 
-- [ ] **步骤 2：收敛同步操作层级**
+- [x] **步骤 2：收敛同步操作层级**
 
 保持“双向全量”为唯一填充色主按钮；“正向全量”和“JSON 回写”统一为 `variant="outlined"`；监控启停统一为 `variant="text"`，只用图标和状态文字表达启停，不改变原有提交动作。
 
-- [ ] **步骤 3：用宿主语义 token 替换组件内强制主题**
+- [x] **步骤 3：用宿主语义 token 替换组件内强制主题**
 
 移除 `.sync-console` 中覆盖 `--v-theme-*` 和 `color-scheme` 的硬编码亮暗色块。局部变量改为：
 
@@ -234,7 +234,7 @@ aria-label="关闭插件页面"
 
 补齐 44px 页头/任务按钮触控目标和与任务 2 相同的 reduced-motion 规则。保留现有移动端表格转信息行布局。
 
-- [ ] **步骤 4：运行合同测试并确认 MediaMetadataSync 用例转绿**
+- [x] **步骤 4：运行合同测试并确认 MediaMetadataSync 用例转绿**
 
 运行：`pytest tests/v2/test_plugin_frontend_workbench.py -v`
 
@@ -245,11 +245,11 @@ aria-label="关闭插件页面"
 **文件：**
 - 修改：`frontend/directoryfilesearch/src/components/Page.vue`
 
-- [ ] **步骤 1：统一壳层、页头、实时状态和指标区**
+- [x] **步骤 1：统一壳层、页头、实时状态和指标区**
 
 根节点改为 `class="plugin-workbench file-search-page"`，加入三个统一 aria-label 和 `aria-live="polite"`。保留现有搜索、指标、选择和删除逻辑。
 
-- [ ] **步骤 2：增加结果、任务状态和执行记录视图**
+- [x] **步骤 2：增加结果、任务状态和执行记录视图**
 
 在脚本中新增：
 
@@ -270,11 +270,11 @@ const activeView = ref('results')
 
 用 `v-window` 包住现有结果区；`status` 视图展示 `state.task_message`、开始/完成时间和错误；`activity` 视图展示 `state.logs` 与 `state.last_report`，空数据时显示明确空状态。只消费现有状态，不新增 API。
 
-- [ ] **步骤 3：替换强制主题并补齐响应式合同**
+- [x] **步骤 3：替换强制主题并补齐响应式合同**
 
 按任务 3 的宿主语义 token 方案移除 `--dfs-*` 对 `--v-theme-*` 的覆盖。保留桌面结果表和当前移动端三列信息行，补齐 44px 触控目标、`letter-spacing: 0` 和 reduced-motion 规则。
 
-- [ ] **步骤 4：运行合同测试并确认三个主页面全部转绿**
+- [x] **步骤 4：运行合同测试并确认三个主页面全部转绿**
 
 运行：`pytest tests/v2/test_plugin_frontend_workbench.py -v`
 
@@ -287,7 +287,7 @@ const activeView = ref('results')
 - 修改：`frontend/mediametadatasync/src/components/Config.vue`
 - 修改：`frontend/directoryfilesearch/src/components/Config.vue`
 
-- [ ] **步骤 1：统一结构与可访问名称**
+- [x] **步骤 1：统一结构与可访问名称**
 
 三个根节点分别改为 `class="plugin-config ..."`，关闭按钮统一加入 `aria-label="关闭插件设置"`。每个复杂字段组后加入持续可见辅助文字：
 
@@ -297,11 +297,11 @@ const activeView = ref('results')
 
 辅助文字按字段语义调整：Emby 说明混合库/蓝光库分类差异，MediaMetadataSync 说明源目录/目标目录和删除挂载边界，DirectoryFileSearch 说明搜索目录限制。
 
-- [ ] **步骤 2：统一字段校验和保存层级**
+- [x] **步骤 2：统一字段校验和保存层级**
 
 保留 DirectoryFileSearch 的现有 `rootError`。为 Emby 启用状态下的媒体库路径、MediaMetadataSync 启用状态下的源/目标目录增加 computed 错误数组，并把错误传给对应 `v-text-field` / `v-textarea`；三个保存按钮在字段无效时禁用。取消保持文本按钮，保存保持唯一填充色主按钮。
 
-- [ ] **步骤 3：统一配置页 CSS 合同**
+- [x] **步骤 3：统一配置页 CSS 合同**
 
 三个配置页都加入：
 
@@ -341,13 +341,13 @@ const activeView = ref('results')
 
 760px 以下字段网格改为单列，配置操作栏允许换行但不覆盖滚动内容。
 
-- [ ] **步骤 4：运行合同测试并确认全绿**
+- [x] **步骤 4：运行合同测试并确认全绿**
 
 运行：`pytest tests/v2/test_plugin_frontend_workbench.py -v`
 
 预期：6 个参数化用例全部通过。
 
-- [ ] **步骤 5：提交 Vue 源码改造**
+- [x] **步骤 5：提交 Vue 源码改造**
 
 ```bash
 git add frontend/embylibraryorganizer/src/components/Page.vue frontend/embylibraryorganizer/src/components/Config.vue frontend/mediametadatasync/src/components/Page.vue frontend/mediametadatasync/src/components/Config.vue frontend/directoryfilesearch/src/components/Page.vue frontend/directoryfilesearch/src/components/Config.vue
@@ -362,13 +362,13 @@ git commit -m "feat: 统一三插件运维工作台界面"
 - 生成：`plugins.v2/directoryfilesearch/dist/`
 - 同步：`/home/zhaojg/MoviePilot/app/plugins/<plugin>/dist/`
 
-- [ ] **步骤 1：构建三个前端**
+- [x] **步骤 1：构建三个前端**
 
 分别在三个前端目录运行：`npm run build`
 
 预期：三个命令退出码均为 0，各自生成 `dist/assets/remoteEntry.js` 并复制到对应 `plugins.v2/<plugin>/dist`。
 
-- [ ] **步骤 2：运行 UI 合同与三个插件回归测试**
+- [x] **步骤 2：运行 UI 合同与三个插件回归测试**
 
 运行：
 
@@ -378,21 +378,21 @@ pytest tests/v2/test_plugin_frontend_workbench.py tests/v2/embylibraryorganizer/
 
 预期：所有用例通过，测试过程无真实网络请求。
 
-- [ ] **步骤 3：启动本地预览并完成视觉检查**
+- [x] **步骤 3：启动本地预览并完成视觉检查**
 
 分别启动三个现有 Vite 预览入口，使用 Playwright 在 1440x900、768x1024 和 375x812 截图。检查主页面与 `?view=config`：无横向滚动、无重叠、亮暗主题文本和边框清晰、按钮触控区域不小于 44px、状态区非空白、结果内容可见。
 
-- [ ] **步骤 4：同步运行时副本**
+- [x] **步骤 4：同步运行时副本**
 
 将三个插件的 `__init__.py`、`core.py`、README 和新 `dist/` 同步到 `/home/zhaojg/MoviePilot/app/plugins/<plugin>/`。使用文件比较确认源插件目录与运行时副本一致，不依赖 Git 状态判断 `app/plugins`。
 
-- [ ] **步骤 5：重启并检查运行时加载**
+- [x] **步骤 5：重启并检查运行时加载**
 
 运行：`moviepilot restart`，随后运行 `moviepilot logs --lines 100`。
 
 预期：日志出现三个插件的加载记录，版本与 `package.v2.json` 一致，且没有联邦资源或插件 API 404。
 
-- [ ] **步骤 6：提交构建产物与验证后的最终改动**
+- [x] **步骤 6：提交构建产物与验证后的最终改动**
 
 ```bash
 git add plugins.v2/embylibraryorganizer/dist plugins.v2/mediametadatasync/dist plugins.v2/directoryfilesearch/dist

@@ -765,7 +765,7 @@ onBeforeUnmount(() => {
   --mms-subtle: rgba(var(--v-theme-surface-variant), 0.28);
   --mms-hover: rgba(var(--v-theme-primary), 0.06);
   --mms-text: rgb(var(--v-theme-on-surface));
-  --mms-muted: rgb(var(--v-theme-on-surface-variant));
+  --mms-muted: rgba(var(--v-theme-on-surface), 0.72);
   --mms-border: rgba(var(--v-border-color), var(--v-border-opacity));
   --mms-border-soft: rgba(var(--v-border-color), 0.18);
   --mms-accent: rgb(var(--v-theme-primary));

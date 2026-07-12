@@ -36,6 +36,7 @@ def test_plugin_page_uses_shared_workbench_contract(plugin_id: str) -> None:
     assert 'aria-live="polite"' in source
     assert "min-height: 44px" in source
     assert "letter-spacing: 0" in source
+    assert "rgba(var(--v-theme-on-surface), 0.72)" in source
     assert "@media (prefers-reduced-motion: reduce)" in source
 
 
@@ -47,6 +48,7 @@ def test_plugin_config_uses_shared_form_contract(plugin_id: str) -> None:
     assert 'class="plugin-config' in source
     assert 'aria-label="关闭插件设置"' in source
     assert 'class="field-help"' in source
+    assert "min-width: 44px" in source
     assert "min-height: 44px" in source
     assert "letter-spacing: 0" in source
     assert "@media (prefers-reduced-motion: reduce)" in source

@@ -281,7 +281,7 @@ watch(
 .plugin-config {
   --mms-surface: rgb(var(--v-theme-surface));
   --mms-text: rgb(var(--v-theme-on-surface));
-  --mms-muted: rgb(var(--v-theme-on-surface-variant));
+  --mms-muted: rgba(var(--v-theme-on-surface), 0.72);
   --mms-border: rgba(var(--v-border-color), var(--v-border-opacity));
   --mms-disabled-bg: rgba(var(--v-theme-on-surface), 0.12);
   --mms-disabled-text: rgba(var(--v-theme-on-surface), 0.68);
@@ -360,6 +360,7 @@ watch(
 
 .config-header :deep(.v-btn),
 .config-actions :deep(.v-btn) {
+  min-width: 44px;
   min-height: 44px;
 }
 

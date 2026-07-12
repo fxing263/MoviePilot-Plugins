@@ -116,7 +116,7 @@ watch(
 .plugin-config {
   --dfs-surface: rgb(var(--v-theme-surface));
   --dfs-text: rgb(var(--v-theme-on-surface));
-  --dfs-muted: rgb(var(--v-theme-on-surface-variant));
+  --dfs-muted: rgba(var(--v-theme-on-surface), 0.72);
   --dfs-border: rgba(var(--v-border-color), var(--v-border-opacity));
   --dfs-accent: rgb(var(--v-theme-primary));
   --dfs-success: rgb(var(--v-theme-success));
@@ -216,6 +216,7 @@ watch(
 
 .config-header :deep(.v-btn),
 .config-actions :deep(.v-btn) {
+  min-width: 44px;
   min-height: 44px;
 }
 

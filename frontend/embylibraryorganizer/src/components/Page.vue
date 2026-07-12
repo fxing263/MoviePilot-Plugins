@@ -710,6 +710,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .plugin-workbench {
+  --workbench-muted: rgba(var(--v-theme-on-surface), 0.72);
   display: flex;
   min-height: min(760px, 92vh);
   flex-direction: column;
@@ -717,6 +718,11 @@ onBeforeUnmount(() => {
   background: rgb(var(--v-theme-surface));
   color: rgb(var(--v-theme-on-surface));
   letter-spacing: 0;
+}
+
+.plugin-workbench :deep(.text-medium-emphasis) {
+  color: var(--workbench-muted) !important;
+  opacity: 1 !important;
 }
 
 .page-header,
@@ -820,7 +826,7 @@ onBeforeUnmount(() => {
 
 .metric-cell span {
   margin-top: 2px;
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: var(--workbench-muted);
   font-size: 0.75rem;
 }
 
@@ -835,7 +841,7 @@ onBeforeUnmount(() => {
 
 .tab-count {
   margin-left: 7px;
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: var(--workbench-muted);
   font-size: 0.75rem;
 }
 
@@ -896,7 +902,7 @@ onBeforeUnmount(() => {
 }
 
 .season-label {
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: var(--workbench-muted);
   font-size: 0.78rem;
 }
 
@@ -927,7 +933,7 @@ onBeforeUnmount(() => {
 
 .orphan-head {
   min-height: 38px;
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: var(--workbench-muted);
   font-size: 0.75rem;
   font-weight: 600;
 }
@@ -939,7 +945,7 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 12px;
   min-height: 170px;
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: var(--workbench-muted);
 }
 
 .pagination {

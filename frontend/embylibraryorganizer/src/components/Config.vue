@@ -237,6 +237,7 @@ onMounted(loadCategories)
 
 <style scoped>
 .plugin-config {
+  --config-muted: rgba(var(--v-theme-on-surface), 0.72);
   display: flex;
   min-height: min(560px, 88vh);
   max-height: 92vh;
@@ -245,6 +246,11 @@ onMounted(loadCategories)
   background: rgb(var(--v-theme-surface));
   color: rgb(var(--v-theme-on-surface));
   letter-spacing: 0;
+}
+
+.plugin-config :deep(.text-medium-emphasis) {
+  color: var(--config-muted) !important;
+  opacity: 1 !important;
 }
 
 .config-header,
@@ -258,6 +264,7 @@ onMounted(loadCategories)
 
 .config-header :deep(.v-btn),
 .config-actions :deep(.v-btn) {
+  min-width: 44px;
   min-height: 44px;
 }
 
@@ -298,7 +305,7 @@ onMounted(loadCategories)
 
 .subsection-title {
   margin: 12px 0 14px;
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: var(--config-muted);
   font-size: 0.8rem;
   font-weight: 600;
 }

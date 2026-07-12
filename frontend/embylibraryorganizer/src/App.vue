@@ -118,6 +118,9 @@ const previewApi = {
     return { code: 0, data: clone(previewState) }
   },
   post: async (url) => {
+    if (url.includes('/categories/preview')) {
+      return { code: 0, data: clone(previewState.categories) }
+    }
     if (url.includes('/scan_')) {
       previewState.status = 'scanning'
       previewState.scan_running = true

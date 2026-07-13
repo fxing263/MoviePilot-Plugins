@@ -65,7 +65,7 @@ class EmbyLibraryOrganizer(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/MoviePilot-Frontend/"
         "refs/heads/v2/src/assets/images/misc/emby.png"
     )
-    plugin_version = "1.2.1"
+    plugin_version = "1.2.2"
     plugin_label = "媒体库整理"
     plugin_author = "zhaojg"
     plugin_config_prefix = "embylibraryorganizer_"
@@ -401,7 +401,7 @@ class EmbyLibraryOrganizer(_PluginBase):
     @staticmethod
     def get_render_mode() -> Tuple[str, Optional[str]]:
         """返回插件Vue联邦组件渲染模式。"""
-        return "vue", "dist/assets"
+        return "vue", "dist/assets-1.2.2"
 
     def get_page(self) -> Optional[List[dict]]:
         """Vue模式下不生成后端页面结构。"""

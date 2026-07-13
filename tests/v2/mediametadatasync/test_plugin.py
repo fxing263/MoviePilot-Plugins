@@ -217,9 +217,9 @@ def test_vue_render_path_is_versioned() -> None:
     """Vue 联邦资源目录应随插件版本变化，避免浏览器复用旧模块。"""
     mode, render_path = MediaMetadataSync.get_render_mode()
 
-    assert MediaMetadataSync.plugin_version == "1.1.1"
+    assert MediaMetadataSync.plugin_version == "1.1.2"
     assert mode == "vue"
-    assert render_path == "dist/assets-1.1.1"
+    assert render_path == "dist/assets-1.1.2"
 
 
 def test_string_false_config_values_are_normalized() -> None:

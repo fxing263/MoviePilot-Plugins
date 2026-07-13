@@ -60,7 +60,7 @@ class DirectoryFileSearch(_PluginBase):
     plugin_name = "目录文件搜索删除"
     plugin_desc = "递归搜索配置目录内的普通文件，并提供单条或批量源文件删除与复核。"
     plugin_icon = "delete.png"
-    plugin_version = "1.1.0"
+    plugin_version = "1.1.1"
     plugin_label = "文件管理"
     plugin_author = "zhaojg"
     plugin_config_prefix = "directoryfilesearch_"
@@ -193,7 +193,7 @@ class DirectoryFileSearch(_PluginBase):
     @staticmethod
     def get_render_mode() -> Tuple[str, Optional[str]]:
         """返回 Vue 联邦组件渲染模式。"""
-        return "vue", "dist/assets-1.1.0"
+        return "vue", "dist/assets-1.1.1"
 
     def get_page(self) -> Optional[List[dict]]:
         """Vue 模式下不生成后端页面结构。"""

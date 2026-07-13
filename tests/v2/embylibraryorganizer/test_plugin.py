@@ -67,6 +67,11 @@ def test_api_paths_are_relative_to_plugin_prefix() -> None:
     assert "/delete_orphan_metadata_batch" in paths
     assert all(not path.startswith("/EmbyLibraryOrganizer/") for path in paths)
 
+    render_mode, render_path = plugin.get_render_mode()
+    assert EmbyLibraryOrganizer.plugin_version == "1.2.2"
+    assert render_mode == "vue"
+    assert render_path == "dist/assets-1.2.2"
+
 
 def test_orphan_metadata_scan_requires_selected_category(tmp_path: Path) -> None:
     """多余元数据扫描未选择分类时应拒绝全库扫描。"""

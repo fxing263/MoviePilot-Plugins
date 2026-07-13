@@ -206,9 +206,9 @@ def test_plugin_api_paths_and_versioned_render_path() -> None:
         "/delete-batch",
     ]
     assert all(not path.startswith("/DirectoryFileSearch/") for path in paths)
-    assert DirectoryFileSearch.plugin_version == "1.1.0"
+    assert DirectoryFileSearch.plugin_version == "1.1.1"
     assert render_mode == "vue"
-    assert render_path == "dist/assets-1.1.0"
+    assert render_path == "dist/assets-1.1.1"
 
 
 def test_plugin_background_search_delete_and_verification(search_root: Path) -> None:

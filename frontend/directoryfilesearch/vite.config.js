@@ -4,7 +4,7 @@ import federation from '@originjs/vite-plugin-federation'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vite'
 
-const federationAssetsDir = 'assets-1.1.0'
+const federationAssetsDir = 'assets-1.1.1'
 
 export default defineConfig(({ command }) => ({
   plugins: [

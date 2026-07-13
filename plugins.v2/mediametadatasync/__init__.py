@@ -81,7 +81,7 @@ class MediaMetadataSync(_PluginBase):
         "在9kg与番号系列目录间同步媒体元数据，支持缺失元数据巡检和三端安全删除。"
     )
     plugin_icon = "sync_file.png"
-    plugin_version = "1.1.1"
+    plugin_version = "1.1.2"
     plugin_label = "元数据同步"
     plugin_author = "zhaojg"
     plugin_config_prefix = "mediametadatasync_"
@@ -278,7 +278,7 @@ class MediaMetadataSync(_PluginBase):
     @staticmethod
     def get_render_mode() -> Tuple[str, Optional[str]]:
         """返回 Vue 联邦组件渲染模式。"""
-        return "vue", "dist/assets-1.1.1"
+        return "vue", "dist/assets-1.1.2"
 
     def get_page(self) -> Optional[List[dict]]:
         """Vue 模式下不生成后端页面结构。"""

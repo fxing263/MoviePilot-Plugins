@@ -1,4 +1,18 @@
 {
+  "SafeRemoveLink": {
+    "name": "清理媒体文件（115安全队列版）",
+    "description": "基于持久化单消费者队列安全清理115媒体文件，避免并发删除触发风控。",
+    "labels": "媒体清理,115,STRM,删除队列,风控",
+    "version": "1.0.0",
+    "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Frontend/refs/heads/v2/src/assets/images/logo.png",
+    "author": "zhaojg",
+    "level": 1,
+    "system_version": ">=2.13.14",
+    "release": true,
+    "history": {
+      "v1.0.0": "基于清理媒体文件插件增加115持久化串行删除、30秒限速、重试、冷却、熔断和重启恢复。"
+    }
+  },
   "EmbyLibraryOrganizer": {
     "name": "Emby媒体库整理",
     "description": "管理基于115 STRM方案建立的Emby媒体库，快速查询多余或缺失元数据，并直接清理本地STRM、联动文件及CD2挂载媒体。",

@@ -12,7 +12,7 @@ function normalizeConfig(response = {}) {
     enabled: config.enabled ?? false,
     scan_once: config.scan_once ?? false,
     history_days: config.history_days ?? 7,
-    confirmation_mode: config.confirmation_mode ?? 'manual',
+    confirmation_mode: 'staging_deleted',
     cleanup_organized: config.cleanup_organized ?? true,
     cleanup_empty_dirs: config.cleanup_empty_dirs ?? true,
     mappings: mappings.map(mapping => ({
@@ -36,19 +36,4 @@ const STATE_LABELS = {
   done: '已完成', cancelled: '已取消', uploaded: '已确认上传',
 };
 
-/** ready_at 使用后端 Unix 秒数，显示时转换为浏览器本地时间。 */
-function formatTime(value) {
-  if (!value) return '—'
-  const date = new Date(typeof value === 'number' ? value * 1000 : value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString()
-}
-
-const _export_sfc = (sfc, props) => {
-  const target = sfc.__vccOpts || sfc;
-  for (const [key, val] of props) {
-    target[key] = val;
-  }
-  return target;
-};
-
-export { PLUGIN_ID as P, STATE_LABELS as S, _export_sfc as _, formatTime as f, normalizeConfig as n, validateAndSave as v };
+export { PLUGIN_ID as P, STATE_LABELS as S, normalizeConfig as n, validateAndSave as v };

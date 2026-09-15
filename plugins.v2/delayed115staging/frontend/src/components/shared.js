@@ -12,7 +12,7 @@ export function normalizeConfig(response = {}) {
     enabled: config.enabled ?? false,
     scan_once: config.scan_once ?? false,
     history_days: config.history_days ?? 7,
-    confirmation_mode: config.confirmation_mode ?? 'manual',
+    confirmation_mode: 'staging_deleted',
     cleanup_organized: config.cleanup_organized ?? true,
     cleanup_empty_dirs: config.cleanup_empty_dirs ?? true,
     mappings: mappings.map(mapping => ({

@@ -47,13 +47,7 @@
       </div>
       </v-card>
       <v-btn variant="tonal" class="mb-4" @click="config.mappings.push({ library_root: '', staging_root: '', rules: [{ directory: '/', delay_minutes: 60 }] })">新增整理目录映射</v-btn>
-      <v-select v-model="config.confirmation_mode" label="上传成功确认方式" :items="confirmationModes" hint="自动确认仅适用于以此模式新建的任务；切回手动会暂停已有任务的自动确认。" persistent-hint class="mb-3" />
-      <v-alert v-if="config.confirmation_mode === 'staging_deleted'" type="warning" variant="tonal" class="mb-3">
-        仅适用于上传器在上传成功后删除暂存文件的配置。插件监控暂存目录中的硬链接，不监控 qBittorrent 做种文件。
-        暂存文件删除后，经至少间隔 30 秒的两次检查才自动确认并按下方选项清理。无法区分人工删除与上传器删除。
-        暂存根目录不可用或被替换时暂停自动确认；根目录正常时，文件或下级目录被删除均可自动确认。
-      </v-alert>
-      <v-alert v-else type="info" variant="tonal" class="mb-3">在任务页核验远端文件后手动确认，或由上传器提交明确的成功回执，再执行清理。</v-alert>
+      <v-alert type="info" variant="tonal" class="mb-3">上传器成功后删除暂存文件，插件自动复查并清理对应整理文件，无需手动确认。实际操作和异常请查看插件日志。</v-alert>
       <v-switch v-model="config.scan_once" label="进行一次全量硬链接" color="warning" hide-details />
       <v-alert type="info" variant="tonal" class="my-3">启用插件后执行一次：扫描整理目录内匹配规则的普通文件（含字幕、刮削文件），新任务不等待延迟。已有任务不重复创建，扫描成功后自动关闭此选项。中断后重新扫描并去重。</v-alert>
       <v-text-field v-model.number="config.history_days" type="number" min="1" max="3650" label="已完成任务记录保留天数" hint="默认 7 天，每天清理一次。仅删除记录，失败和未完成任务保留；记录过期后再次手动全量扫描可能重新投递仍保留的整理文件。" persistent-hint class="my-3" />
@@ -80,10 +74,6 @@ const props = defineProps({
   pluginId: { type: String, default: PLUGIN_ID },
 })
 const emit = defineEmits(['save', 'close', 'switch'])
-const confirmationModes = [
-  { title: '手动确认 / 上传器成功回执', value: 'manual' },
-  { title: '上传器删除暂存文件后自动确认', value: 'staging_deleted' },
-]
 const config = reactive(normalizeConfig(props.initialConfig))
 const loading = ref(true)
 const loadFailed = ref(false)

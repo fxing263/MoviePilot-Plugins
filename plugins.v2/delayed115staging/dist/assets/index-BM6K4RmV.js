@@ -1,7 +1,7 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
 import { p as propsFactory, i as includes, I as IS_WEBKIT, a as isOn, e as eventName, g as genericComponent, b as isPrimitive, c as callEvent, d as getCurrentInstance, f as provideTheme, h as createLayout, u as useRtl, m as makeThemeProps, o as omit, j as makeLayoutProps, P as PREFERS_REDUCED_MOTION, k as acceleratedEasing, l as deceleratedEasing, s as standardEasing, n as provideDefaults, q as convertToUnit, r as destructComputed, t as isCssColor, v as isParsableColor, w as parseColor, x as getForeground, y as getCurrentInstanceName, z as isObject, A as onlyDefinedProps, S as SUPPORTS_INTERSECTION, B as clamp, C as consoleWarn, D as useProxiedModel, E as useToggleScope, F as useLayoutItem, G as makeLayoutItemProps, H as findChildrenWithProvide, J as wrapInArray, K as useTheme, L as useIcon, M as IconValue, N as flattenFragments, O as useResizeObserver, Q as hasEvent, R as IN_BROWSER, T as useLocale, U as EventProp, V as filterInputAttrs, W as matchesSelector, X as pick, Y as useDisplay, Z as useGoTo, _ as focusableChildren, $ as makeDisplayProps, a0 as consoleError, a1 as defineComponent, a2 as deprecate, a3 as getPropertyFromItem, a4 as focusChild, a5 as CircularBuffer, a6 as defer, a7 as templateRef, a8 as isClickInsideElement, a9 as getNextElement, aa as debounce, ab as camelizeProps, ac as ensureValidVNode, ad as checkPrintable, ae as noop, af as pickWithRest, ag as provideLocale, ah as useDate, ai as keys, aj as getEventCoordinates, ak as HexToHSV, al as HSVtoHex, am as HSLtoHSV, an as HSVtoHSL, ao as RGBtoHSV, ap as HSVtoRGB, aq as has, ar as getDecimals, as as createRange, at as keyValues, au as SUPPORTS_EYE_DROPPER, av as HSVtoCSS, aw as RGBtoCSS, ax as getContrast, ay as escapeForRegex, az as isComposingIgnoreKey, aA as deepToRaw, aB as getObjectValueByPath, aC as isEmpty, aD as defineFunctionalComponent, aE as breakpoints, aF as createDateRange, aG as daysDiff, aH as humanReadableFileSize, aI as splitKeySequence, aJ as splitKeyCombination, aK as mergeDeep, aL as useLayout, aM as extractNumber, aN as VuetifyLayoutKey, aO as refElement, aP as SUPPORTS_MATCH_MEDIA, aQ as renderSlot, aR as VClassIcon, aS as VComponentIcon, aT as VLigatureIcon, aU as VSvgIcon } from './hotkey-parsing-DTQLcWbB.js';
-import Config from './__federation_expose_Config-Cm3o_xZR.js';
-import Page from './__federation_expose_Page-DjJudt6V.js';
+import Config from './__federation_expose_Config-BHk74soz.js';
+import _sfc_main$1 from './__federation_expose_Page-rjmaVmhw.js';
 
 true              &&(function polyfill() {
   const relList = document.createElement("link").relList;
@@ -33074,7 +33074,7 @@ return (_ctx, _cache) => {
                     onSwitch: _cache[0] || (_cache[0] = $event => (showConfig.value = false)),
                     onSave: _cache[1] || (_cache[1] = $event => (saved.value = true))
                   }))
-                : (_openBlock(), _createBlock(Page, {
+                : (_openBlock(), _createBlock(_sfc_main$1, {
                     key: 1,
                     api: api,
                     onSwitch: _cache[2] || (_cache[2] = $event => (showConfig.value = true))

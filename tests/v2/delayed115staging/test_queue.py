@@ -1058,3 +1058,19 @@ def test_deleted_show_directory_resumes_existing_paused_task_after_restart(setup
     assert not s.source.exists() and s.download.exists()
     assert Path(s.config['staging_root']).is_dir()
     assert Path(s.config['library_root']).is_dir()
+
+
+def test_actual_link_and_cleanup_operations_are_logged(setup_queue, monkeypatch):
+    s = setup_queue
+    messages = []
+    monkeypatch.setattr(s.engine.logger, 'info', messages.append)
+    _task_id, destination = _auto_stage(s)
+    assert any('硬链接创建成功' in item and str(s.source) in item and str(destination) in item for item in messages)
+    destination.unlink()
+    _tick_auto(s)
+    s.now[0] += 30
+    _tick_auto(s)
+    assert any('暂存文件删除已确认' in item for item in messages)
+    assert any('整理文件删除成功' in item and str(s.source) in item for item in messages)
+    assert any('暂存任务完成' in item for item in messages)
+    assert s.download.exists()

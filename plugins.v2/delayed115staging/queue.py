@@ -14,6 +14,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
+from app.sdk.logging import logger
+
 GB = 1_000_000_000
 DELETION_CONFIRM_SECONDS = 30
 TERMINAL = {"done", "cancelled"}
@@ -387,9 +389,13 @@ class StagingQueue:
                         self._observe_staging_deletion(task)
                     else:
                         task.pop("deletion_seen_at", None)
+                    if task.get("error") and task.get("error") != previous.get("error"):
+                        logger.warning(f"自动确认暂停：{task['staging_path']}；{task['error']}")
                     if task != previous:
                         # 确认依据必须先落盘，再进入下面的清理步骤。
                         self._save(data)
+                        if task["state"] == "confirmed":
+                            logger.info(f"暂存文件删除已确认（按上传器约定）：{task['staging_path']}")
                 if task["state"] == "confirmed":
                     self._cleanup(data, task, cleanup_organized)
 
@@ -487,6 +493,7 @@ class StagingQueue:
                 # os.link 不覆盖目标，也不回退复制；上传器可以在返回后立即取走暂存文件。
                 os.link(source.name, destination.name, src_dir_fd=source_parent,
                         dst_dir_fd=target_parent, follow_symlinks=False)
+                logger.info(f"硬链接创建成功：{source} → {destination}")
                 os.fsync(target_parent)
                 try:
                     linked = _identity(os.stat(destination.name, dir_fd=target_parent, follow_symlinks=False))
@@ -498,6 +505,7 @@ class StagingQueue:
             task["state"], task["error"] = "staged", ""
         except (OSError, ValueError) as error:
             task["state"], task["error"] = "failed", str(error)
+            logger.error(f"硬链接暂存失败：{source} → {destination}；{error}")
         self._save(data)
 
     def action(self, task_id: str, action: str, remote_reference: str = "", verified: bool = False) -> None:
@@ -591,6 +599,7 @@ class StagingQueue:
         try:
             with _directory(path.parent) as parent:
                 os.unlink(path.name, dir_fd=parent)
+                logger.info(f"整理文件删除成功：{path}")
                 os.fsync(parent)
             return "removed"
         except FileNotFoundError:
@@ -605,6 +614,7 @@ class StagingQueue:
             try:
                 with _directory(current.parent) as parent:
                     os.rmdir(current.name, dir_fd=parent)
+                    logger.info(f"空目录删除成功：{current}")
             except FileNotFoundError:
                 pass
             except OSError as error:
@@ -634,6 +644,11 @@ class StagingQueue:
                     else:
                         task["cleanup_result"][key] = self._remove(path, task["identity"], f"{task['id']}-{key}")
                     self._save(data)
+                    result = task["cleanup_result"][key]
+                    if key == "staging" and result == "removed":
+                        logger.info(f"暂存硬链接删除成功：{path}")
+                    elif result == "already_absent":
+                        logger.info(f"清理目标已不存在：{path}")
                 if task["cleanup_empty_dirs"]:
                     # 同目录还有待自动确认的任务时，保留其目录身份作为观测证据。
                     protected = tuple(Path(other["staging_path"]).parent for other in data["tasks"].values()
@@ -642,6 +657,8 @@ class StagingQueue:
                     self._prune(path, root, protected)
             task["state"], task["error"] = "done", ""
             task["completed_at"] = self.clock()
+            logger.info(f"暂存任务完成：{task['relative_path']}；整理文件{'保留' if task['cleanup_result'].get('organized') == 'retained' else '已清理'}")
         except (OSError, ValueError) as error:
             task["state"], task["error"] = "cleanup_failed", str(error)
+            logger.error(f"文件清理失败：{task['source_path']}；{error}")
         self._save(data)

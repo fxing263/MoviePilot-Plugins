@@ -113,12 +113,12 @@ console.log(JSON.stringify({normalized, unchanged: before === JSON.stringify(sou
     )
     result = json.loads(completed.stdout)
     expected = {"scan_once": False, "history_days": 7, "enabled": True, "cleanup_organized": True, "cleanup_empty_dirs": False,
-                "confirmation_mode": confirmation_mode or "manual",
+                "confirmation_mode": "staging_deleted",
                 "mappings": [first] if legacy else [first, second]}
     assert result["normalized"] == expected
     assert result["unchanged"] is True
     saved = result["emitted"][0][1]
-    assert saved["confirmation_mode"] == (confirmation_mode or "manual")
+    assert saved["confirmation_mode"] == ("staging_deleted")
     assert saved["mappings"][0]["library_root"] == "/pt1"
     assert saved["mappings"][0]["rules"][0]["delay_minutes"] == 123
     if not legacy:

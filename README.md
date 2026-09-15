@@ -220,3 +220,9 @@ MoviePilot 插件开发资料：
 ## 许可证
 
 本仓库使用 [GNU General Public License v3.0](./LICENSE)。
+
+## 115 延迟暂存
+
+新增 [Delayed115Staging 1.3.1](plugins.v2/delayed115staging/README.md)：整理完成后按目录或文件大小延迟硬链接到独立暂存目录，由现有监控上传器上传；支持多根目录、持久化恢复、一次全量硬链接和完成记录定期清理。
+
+需要提供 `app.sdk.plugin.base`、`app.sdk.events` 的 MoviePilot SDK 版本，未适配旧版宿主。插件市场仓库地址：`https://github.com/fxing263/MoviePilot-Plugins`。

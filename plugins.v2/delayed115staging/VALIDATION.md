@@ -1,3 +1,11 @@
+# 1.3.2 插件基类入口兼容修复
+
+- 缺少 app.sdk.plugin 或 app.sdk.plugin.base 时回退 app.plugins._PluginBase。
+- 不捕获其他依赖缺失，不替换宿主鉴权或事件 API。
+- 隔离 pytest 后端/前端 125 passed；新增两个入口缺失回退和非入口依赖失败不吞错用例。
+- 变更 Python pylint 10/10；未操作真实媒体。另一台宿主尚未实际运行验证。
+- 延续用户批准的发布范围：仓库既有全量引导与缺失插件问题不纳入本次修复。
+
 # 1.3.1 发布验证
 
 - 在提供 app.sdk 的 MoviePilot 后端和独立锁定 Python 环境中，插件后端/前端专项 pytest：122 passed。

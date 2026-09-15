@@ -1,13 +1,14 @@
-# 115 延迟暂存（Delayed115Staging，1.3.1）
+# 115 延迟暂存（Delayed115Staging，1.3.2）
 
 在 MoviePilot 整理完成与现有目录监控上传器之间，增加持久化延迟与硬链接暂存。
 不连接 115，不实现上传、STRM、Emby 刷新、下载器或做种清理。
 
 ## 安装与配置
 
-在 MoviePilot 插件市场添加仓库 `https://github.com/fxing263/MoviePilot-Plugins`，搜索「115延迟暂存」安装。
+在插件市场添加 `https://github.com/fxing263/MoviePilot-Plugins`，搜索「115延迟暂存」安装或更新。
 
-适用于提供 `app.sdk.plugin.base`、`app.sdk.events` 等 SDK 的当前 MoviePilot，
+适用于提供 `app.sdk.events`、`app.sdk.logging`、`app.sdk.security` 的 MoviePilot；
+插件基类支持新入口 `app.sdk.plugin.base` 和旧入口 `app.plugins`，
 运行环境为 Linux/Docker。未适配不含这些 SDK 的旧版 MoviePilot。
 将本目录作为完整的 `delayed115staging` 插件包导入插件安装目录；必须包含
 `__init__.py`、`queue.py` 和 `dist/`。`frontend/` 是可选的前端构建源码。

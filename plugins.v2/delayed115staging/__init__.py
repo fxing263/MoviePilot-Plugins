@@ -11,10 +11,17 @@ from app.schemas.token import TokenPayload
 from app.schemas.types import EventType
 from app.sdk.events import Event, eventmanager
 from app.sdk.logging import logger
-from app.sdk.plugin.base import _PluginBase
 from app.sdk.security import verify_token
 
 from .queue import DEFAULTS, StagingQueue, validate_config
+
+# 部分已提供 SDK 的宿主仍将插件基类放在 app.plugins；只回退缺失的基类入口。
+try:
+    from app.sdk.plugin.base import _PluginBase
+except ModuleNotFoundError as import_error:
+    if import_error.name not in {"app.sdk.plugin", "app.sdk.plugin.base"}:
+        raise
+    from app.plugins import _PluginBase
 
 
 def _admin(principal: TokenPayload = Depends(verify_token)) -> None:
@@ -28,7 +35,7 @@ class Delayed115Staging(_PluginBase):
     plugin_name = "115延迟暂存"
     plugin_desc = "整理完成后按目录或文件大小延迟硬链接到115监控目录，确认远端成功后安全清理。"
     plugin_icon = "mdi-clock-outline"
-    plugin_version = "1.3.1"
+    plugin_version = "1.3.2"
     plugin_author = "MoviePilot local"
     author_url = "https://github.com/jxxghp/MoviePilot"
     plugin_config_prefix = "delayed115staging_"

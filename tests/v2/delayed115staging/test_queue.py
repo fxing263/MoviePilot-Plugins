@@ -1008,3 +1008,29 @@ def test_full_scan_switch_resets_only_after_success(setup_queue, monkeypatch):
     assert s.queue.tasks()[0]['state'] == 'staged'
     plugin.process_tasks()
     assert len(s.queue.tasks()) == 1
+
+
+@pytest.mark.parametrize("missing", ["app.sdk.plugin", "app.sdk.plugin.base", "unrelated_dependency"])
+def test_plugin_base_import_compatibility(plugin_module, monkeypatch, missing):
+    import builtins
+    original_import = builtins.__import__
+    base = plugin_module._PluginBase
+    calls = []
+    def import_with_missing_sdk(name, *args, **kwargs):
+        if name == "app.sdk.plugin.base":
+            raise ModuleNotFoundError("simulated missing module", name=missing)
+        if name == "app.plugins":
+            calls.append(name)
+            return SimpleNamespace(_PluginBase=base)
+        return original_import(name, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(builtins, "__import__", import_with_missing_sdk)
+        if missing == "unrelated_dependency":
+            with pytest.raises(ModuleNotFoundError):
+                importlib.reload(plugin_module)
+            assert not calls
+        else:
+            module = importlib.reload(plugin_module)
+            assert issubclass(module.Delayed115Staging, base)
+            assert calls == ["app.plugins"]
+    importlib.reload(plugin_module)

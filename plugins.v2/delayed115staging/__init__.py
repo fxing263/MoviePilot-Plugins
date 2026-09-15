@@ -35,7 +35,7 @@ class Delayed115Staging(_PluginBase):
     plugin_name = "115延迟暂存"
     plugin_desc = "整理完成后按目录或文件大小延迟硬链接到115监控目录，确认远端成功后安全清理。"
     plugin_icon = "mdi-clock-outline"
-    plugin_version = "1.3.2"
+    plugin_version = "1.3.3"
     plugin_author = "MoviePilot local"
     author_url = "https://github.com/jxxghp/MoviePilot"
     plugin_config_prefix = "delayed115staging_"

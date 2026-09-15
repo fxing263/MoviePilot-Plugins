@@ -680,6 +680,10 @@ def test_missing_or_replaced_staging_directory_never_confirms(setup_queue, targe
     s.now[0] += 31
     _tick_auto(s)
     task = s.queue.tasks()[0]
+    if target == "parent" and not replacement:
+        assert task["state"] == "done" and not s.source.exists()
+        assert s.download.exists()
+        return
     assert task["state"] == "staged" and task["upload_result"] is None
     assert "deletion_seen_at" not in task and "自动确认暂停" in task["error"]
     assert s.source.exists() and s.download.exists()
@@ -827,7 +831,7 @@ def test_confirmation_mode_validated_in_legacy_and_mapping_config(setup_queue):
             s.engine.validate_config(dict(config, confirmation_mode="anything"))
 
 
-def test_parent_disappears_during_missing_file_check_is_not_confirmation(setup_queue, monkeypatch):
+def test_parent_disappears_during_missing_file_check_can_confirm(setup_queue, monkeypatch):
     s = setup_queue
     _task_id, destination = _auto_stage(s)
     destination.unlink()
@@ -842,7 +846,7 @@ def test_parent_disappears_during_missing_file_check_is_not_confirmation(setup_q
         return original_stat(path, *args, **kwargs)
     monkeypatch.setattr(os, "stat", detach_parent)
     _tick_auto(s)
-    assert s.queue.tasks()[0]["state"] == "staged" and s.source.exists()
+    assert s.queue.tasks()[0]["state"] == "done" and not s.source.exists()
 
 
 def test_malformed_staging_evidence_never_confirms(setup_queue):
@@ -1034,3 +1038,23 @@ def test_plugin_base_import_compatibility(plugin_module, monkeypatch, missing):
             assert issubclass(module.Delayed115Staging, base)
             assert calls == ["app.plugins"]
     importlib.reload(plugin_module)
+
+
+def test_deleted_show_directory_resumes_existing_paused_task_after_restart(setup_queue):
+    import shutil
+    s = setup_queue
+    _task_id, destination = _auto_stage(s)
+    with s.queue._locked() as data:
+        next(iter(data['tasks'].values()))['error'] = '自动确认暂停：No such file or directory'
+        s.queue._save(data)
+    shutil.rmtree(destination.parent.parent)
+    s.queue = s.engine.StagingQueue(s.queue.directory, clock=lambda: s.now[0])
+    _tick_auto(s)
+    assert s.queue.tasks()[0]['state'] == 'staged' and s.source.exists()
+    s.now[0] += 30
+    _tick_auto(s)
+    task = s.queue.tasks()[0]
+    assert task['state'] == 'done' and task['error'] == ''
+    assert not s.source.exists() and s.download.exists()
+    assert Path(s.config['staging_root']).is_dir()
+    assert Path(s.config['library_root']).is_dir()

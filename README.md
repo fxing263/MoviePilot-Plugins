@@ -223,8 +223,8 @@ MoviePilot 插件开发资料：
 
 ## 115 延迟暂存
 
-新增 [Delayed115Staging 1.3.2](plugins.v2/delayed115staging/README.md)：整理完成后按目录或文件大小延迟硬链接到独立暂存目录，由现有监控上传器上传；支持多根目录、持久化恢复、一次全量硬链接和完成记录定期清理。
+新增 [Delayed115Staging 1.3.3](plugins.v2/delayed115staging/README.md)：整理完成后按目录或文件大小延迟硬链接到独立暂存目录，由现有监控上传器上传；支持多根目录、持久化恢复、一次全量硬链接和完成记录定期清理。
 
 需要提供 `app.sdk.events` 等 SDK 的 MoviePilot；基类支持 `app.sdk.plugin.base` 或 `app.plugins`，未适配旧版宿主。插件市场仓库地址：`https://github.com/fxing263/MoviePilot-Plugins`。
 
-[下载 115 延迟暂存 1.3.2 安装包](releases/delayed115staging-1.3.2.zip)。当前采用仓库源码安装，安装不依赖 GitHub Actions 或 Release 页面。
+[下载 115 延迟暂存 1.3.3 安装包](releases/delayed115staging-1.3.3.zip)。当前采用仓库源码安装，安装不依赖 GitHub Actions 或 Release 页面。

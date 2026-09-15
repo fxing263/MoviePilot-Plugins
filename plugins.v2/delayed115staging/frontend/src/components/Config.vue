@@ -51,7 +51,7 @@
       <v-alert v-if="config.confirmation_mode === 'staging_deleted'" type="warning" variant="tonal" class="mb-3">
         仅适用于上传器在上传成功后删除暂存文件的配置。插件监控暂存目录中的硬链接，不监控 qBittorrent 做种文件。
         暂存文件删除后，经至少间隔 30 秒的两次检查才自动确认并按下方选项清理。无法区分人工删除与上传器删除。
-        目录不可用、被替换或父目录被上传器一并清理时暂停自动确认，可在任务页人工核验。
+        暂存根目录不可用或被替换时暂停自动确认；根目录正常时，文件或下级目录被删除均可自动确认。
       </v-alert>
       <v-alert v-else type="info" variant="tonal" class="mb-3">在任务页核验远端文件后手动确认，或由上传器提交明确的成功回执，再执行清理。</v-alert>
       <v-switch v-model="config.scan_once" label="进行一次全量硬链接" color="warning" hide-details />

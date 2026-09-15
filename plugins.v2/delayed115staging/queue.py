@@ -397,7 +397,7 @@ class StagingQueue:
         """按用户声明的上传器成功删除约定确认；目录异常和文件替换不构成成功。
 
         只接受本插件已持久化链接成功证据的新任务。相隔至少 30 秒的两次检查中，
-        暂存根/父目录身份保持一致，且暂存文件不存在，才记录推定确认。
+        暂存根目录身份保持一致，且暂存文件或下级目录不存在，才记录推定确认。
         整理文件按映射路径清理，确认阶段不读取其文件身份。
         此结果不冒充对 115 的远端查询；人为删除在该模式下同样会被视为成功。
         """
@@ -409,13 +409,16 @@ class StagingQueue:
             return
         path = Path(task["staging_path"])
         try:
-            with _directory(Path(task["staging_root"])) as root, _directory(path.parent) as parent:
-                if (_directory_identity(root) != evidence["root_identity"]
-                        or _directory_identity(parent) != evidence["parent_identity"]):
-                    raise ValueError("暂存根或父目录身份变化")
+            with _directory(Path(task["staging_root"])) as root:
+                if _directory_identity(root) != evidence["root_identity"]:
+                    raise ValueError("暂存根目录身份变化")
                 try:
-                    current_stat = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+                    with _directory(path.parent) as parent:
+                        if _directory_identity(parent) != evidence["parent_identity"]:
+                            raise ValueError("暂存父目录身份变化")
+                        current_stat = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
                 except FileNotFoundError:
+                    # 根目录已单独核验；其下级目录被删除与文件被删除采用同一确认约定。
                     current = None
                 else:
                     try:
@@ -431,10 +434,15 @@ class StagingQueue:
                     task["error"] = ""
                     return
                 # 打开的目录句柄可能仍指向刚被移走的目录，缺失观测后重新核对路径绑定。
-                with _directory(Path(task["staging_root"])) as current_root, _directory(path.parent) as current_parent:
-                    if (_directory_identity(current_root) != evidence["root_identity"]
-                            or _directory_identity(current_parent) != evidence["parent_identity"]):
-                        raise ValueError("缺失检查期间暂存目录发生变化")
+                with _directory(Path(task["staging_root"])) as current_root:
+                    if _directory_identity(current_root) != evidence["root_identity"]:
+                        raise ValueError("缺失检查期间暂存根目录发生变化")
+                try:
+                    with _directory(path.parent) as current_parent:
+                        if _directory_identity(current_parent) != evidence["parent_identity"]:
+                            raise ValueError("缺失检查期间暂存父目录发生变化")
+                except FileNotFoundError:
+                    pass
         except (OSError, ValueError) as error:
             task.pop("deletion_seen_at", None)
             task["error"] = f"自动确认暂停：{error}"

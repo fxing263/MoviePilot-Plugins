@@ -46,7 +46,6 @@ def validate_config(config: dict) -> dict:
     if not result["include_tags"]:
         raise ValueError("标签白名单不能为空")
     roots = []
-    remotes = []
     for mapping in result["mappings"] + result["watch_mappings"]:
         if not isinstance(mapping, dict):
             raise ValueError("目录映射必须是对象")
@@ -62,14 +61,11 @@ def validate_config(config: dict) -> dict:
                 raise ValueError("根目录不能是 / 或包含 ..")
             mapping[key] = str(path)
         root = Path(mapping["library_root"])
-        remote = PurePosixPath(mapping["remote_root"])
         if root.resolve() != root:
             raise ValueError("整理根不能经过符号链接")
-        for candidate, existing in ((root, roots), (remote, remotes)):
-            if any(candidate.is_relative_to(old) or old.is_relative_to(candidate) for old in existing):
-                raise ValueError("同类根目录不能重复或互相包含")
+        if any(root.is_relative_to(old) or old.is_relative_to(root) for old in roots):
+            raise ValueError("本地整理根目录不能重复或互相包含")
         roots.append(root)
-        remotes.append(remote)
         initial_delay = mapping.setdefault("initial_delay_minutes", 0)
         if (isinstance(initial_delay, bool) or not isinstance(initial_delay, (int, float))
                 or not 0 <= initial_delay <= 525600):

@@ -238,3 +238,7 @@ Playwright 在1000×840和390×844模拟界面检查分页保留输入、新增/
 ## 2026-10-12 BDMV Cron 1.2.2
 
 BDMV扫描改为五段Cron，旧HH:MM等价迁移，进度轮询仍一分钟。实际v3.1.4环境 `uv run --locked --no-sync pytest tests/test_rapid115upload.py tests/test_rapid115upload_frontend.py tests/test_rapid115upload_bdmv.py tests/test_rapid115upload_bdmv_cd2.py -q`：201 passed；修改Python与测试pylint10/10；前端npm run build成功。未执行真实上传。
+
+## 2026-10-12 1.2.3 目标目录映射
+
+用户明确允许115目标根重复/包含，仅本地根保持互斥。新增远端同根/父子及本地同根/父子双向校验回归。七文件完整相关pytest：292 passed；rules.py、__init__.py及test_rapid115upload.py pylint10/10。

@@ -1,0 +1,172 @@
+import type { RecommendSource } from '@/api/types'
+import type { MediaSourceInfo } from '@/api/types'
+
+export interface RecommendViewSource {
+  apipath: string
+  linkurl: string
+  title: string
+  type: string
+}
+
+const RECOMMEND_SOURCE_REQUIREMENTS: Record<string, { mediaSource?: string; moduleId?: string }> = {
+  'recommend/tmdb_': { mediaSource: 'themoviedb' },
+  'recommend/douban_': { mediaSource: 'douban' },
+  'recommend/bangumi_': { mediaSource: 'bangumi' },
+  'anilist/': { mediaSource: 'anilist' },
+  'recommend/music_weekly': { moduleId: 'ListenBrainzModule' },
+  'recommend/music_douban': { mediaSource: 'doubanmusic' },
+}
+
+/** 判断当前后端来源和宿主模块是否仍有可展示的内置推荐入口。 */
+export function hasAvailableRecommendSources(
+  mediaSources?: readonly MediaSourceInfo[],
+  activeModuleIds?: ReadonlySet<string>,
+): boolean {
+  const availableSources = mediaSources ? new Set(mediaSources.map(source => source.media_source)) : null
+  return Object.values(RECOMMEND_SOURCE_REQUIREMENTS).some(requirement => {
+    if (requirement.mediaSource) return !availableSources || availableSources.has(requirement.mediaSource)
+    return !activeModuleIds || activeModuleIds.has(requirement.moduleId as string)
+  })
+}
+
+/** 根据后端媒体来源和模块目录移除已关闭的内置推荐榜单。 */
+export function filterAvailableRecommendSources(
+  sources: RecommendViewSource[],
+  mediaSources?: readonly MediaSourceInfo[],
+  activeModuleIds?: ReadonlySet<string>,
+): RecommendViewSource[] {
+  const availableSources = mediaSources ? new Set(mediaSources.map(source => source.media_source)) : null
+  return sources.filter(source => {
+    const requirement = Object.entries(RECOMMEND_SOURCE_REQUIREMENTS).find(([prefix]) =>
+      source.apipath.startsWith(prefix),
+    )?.[1]
+    if (!requirement) return true
+    if (requirement.mediaSource) return !availableSources || availableSources.has(requirement.mediaSource)
+    return !activeModuleIds || activeModuleIds.has(requirement.moduleId as string)
+  })
+}
+
+type Translate = (key: string) => string
+
+/** 创建与推荐页面一致的内置媒体来源列表。 */
+export function createBuiltInRecommendSources(t: Translate): RecommendViewSource[] {
+  return [
+    {
+      apipath: 'recommend/tmdb_trending',
+      linkurl: '/browse/recommend/tmdb_trending?title=' + t('recommend.trendingNow'),
+      title: t('recommend.trendingNow'),
+      type: t('recommend.categoryRankings'),
+    },
+    {
+      apipath: 'recommend/douban_showing',
+      linkurl: '/browse/recommend/douban_showing?title=' + t('recommend.nowShowing'),
+      title: t('recommend.nowShowing'),
+      type: t('recommend.categoryMovie'),
+    },
+    {
+      apipath: 'recommend/bangumi_calendar',
+      linkurl: '/browse/recommend/bangumi_calendar?title=' + t('recommend.bangumiDaily'),
+      title: t('recommend.bangumiDaily'),
+      type: t('recommend.categoryAnime'),
+    },
+    {
+      apipath: 'anilist/trending',
+      linkurl: '/browse/anilist/trending?title=' + t('recommend.anilistTrendingNow'),
+      title: t('recommend.anilistTrendingNow'),
+      type: t('recommend.categoryAnime'),
+    },
+    {
+      apipath: 'anilist/popular-this-season',
+      linkurl: '/browse/anilist/popular-this-season?title=' + t('recommend.anilistPopularThisSeason'),
+      title: t('recommend.anilistPopularThisSeason'),
+      type: t('recommend.categoryAnime'),
+    },
+    {
+      apipath: 'recommend/music_weekly',
+      linkurl: '/browse/recommend/music_weekly?title=' + t('recommend.listenBrainzWeekly'),
+      title: t('recommend.listenBrainzWeekly'),
+      type: t('recommend.categoryMusic'),
+    },
+    {
+      apipath: 'recommend/music_douban',
+      linkurl: '/browse/recommend/music_douban?title=' + t('recommend.doubanMusic'),
+      title: t('recommend.doubanMusic'),
+      type: t('recommend.categoryMusic'),
+    },
+    {
+      apipath: 'recommend/tmdb_movies',
+      linkurl: '/browse/recommend/tmdb_movies?title=' + t('recommend.tmdbHotMovies'),
+      title: t('recommend.tmdbHotMovies'),
+      type: t('recommend.categoryMovie'),
+    },
+    {
+      apipath: 'recommend/tmdb_tvs?with_original_language=zh|en|ja|ko',
+      linkurl: '/browse/recommend/tmdb_tvs?with_original_language=zh|en|ja|ko&title=' + t('recommend.tmdbHotTVShows'),
+      title: t('recommend.tmdbHotTVShows'),
+      type: t('recommend.categoryTV'),
+    },
+    {
+      apipath: 'recommend/douban_movie_hot',
+      linkurl: '/browse/recommend/douban_movie_hot?title=' + t('recommend.doubanHotMovies'),
+      title: t('recommend.doubanHotMovies'),
+      type: t('recommend.categoryMovie'),
+    },
+    {
+      apipath: 'recommend/douban_tv_hot',
+      linkurl: '/browse/recommend/douban_tv_hot?title=' + t('recommend.doubanHotTVShows'),
+      title: t('recommend.doubanHotTVShows'),
+      type: t('recommend.categoryTV'),
+    },
+    {
+      apipath: 'recommend/douban_tv_animation',
+      linkurl: '/browse/recommend/douban_tv_animation?title=' + t('recommend.doubanHotAnime'),
+      title: t('recommend.doubanHotAnime'),
+      type: t('recommend.categoryAnime'),
+    },
+    {
+      apipath: 'recommend/douban_movies',
+      linkurl: '/browse/recommend/douban_movies?title=' + t('recommend.doubanNewMovies'),
+      title: t('recommend.doubanNewMovies'),
+      type: t('recommend.categoryMovie'),
+    },
+    {
+      apipath: 'recommend/douban_tvs',
+      linkurl: '/browse/recommend/douban_tvs?title=' + t('recommend.doubanNewTVShows'),
+      title: t('recommend.doubanNewTVShows'),
+      type: t('recommend.categoryTV'),
+    },
+    {
+      apipath: 'recommend/douban_movie_top250',
+      linkurl: '/browse/recommend/douban_movie_top250?title=' + t('recommend.doubanTop250'),
+      title: t('recommend.doubanTop250'),
+      type: t('recommend.categoryRankings'),
+    },
+    {
+      apipath: 'recommend/douban_tv_weekly_chinese',
+      linkurl: '/browse/recommend/douban_tv_weekly_chinese?title=' + t('recommend.doubanChineseTVRankings'),
+      title: t('recommend.doubanChineseTVRankings'),
+      type: t('recommend.categoryRankings'),
+    },
+    {
+      apipath: 'recommend/douban_tv_weekly_global',
+      linkurl: '/browse/recommend/douban_tv_weekly_global?title=' + t('recommend.doubanGlobalTVRankings'),
+      title: t('recommend.doubanGlobalTVRankings'),
+      type: t('recommend.categoryRankings'),
+    },
+  ]
+}
+
+/** 把后端扩展媒体来源合并到现有来源列表，并保持已有顺序。 */
+export function mergeExtraRecommendSources(target: RecommendViewSource[], sources: RecommendSource[]) {
+  sources.forEach(source => {
+    if (target.some(item => item.apipath === source.api_path)) return
+
+    const querySeparator = source.api_path.includes('?') ? '&' : '?'
+    target.push({
+      apipath: source.api_path,
+      linkurl: `/browse/${source.api_path}${querySeparator}title=${encodeURIComponent(source.name)}`,
+      title: source.name,
+      type: source.type,
+    })
+  })
+}

@@ -95,5 +95,22 @@
     },
     "release": false,
     "labels": "115,延迟上传,硬链接,暂存"
+  },
+  "Rapid115Upload": {
+    "name": "媒体整理增强",
+    "description": "整理后115秒传与普通上传、qB标签监控、BDMV通过CD2整目录上传及Cron扫描。",
+    "version": "1.2.2",
+    "author": "zhaojg",
+    "level": 1,
+    "icon": "mdi-cloud-upload-outline",
+    "system_version": ">=3.0.2",
+    "history": {
+      "v1.0.0": "复用整理事件与联邦页面；仅秒传、重启恢复、无限延迟重试及三行路径记录",
+      "v1.1.0": "合并qB标签监控1.1.1，默认双任务并发，普通上传回退与整种子标签核对",
+      "v1.2.0": "新增BDMV每日扫描、CD2整目录上传、持久化核对和已上传标签切换",
+      "v1.2.1": "BDMV使用CD2任务完成状态和计数，不再复查115目录",
+      "v1.2.2": "BDMV扫描支持五段Cron，兼容旧每日时间配置"
+    },
+    "release": true
   }
 }

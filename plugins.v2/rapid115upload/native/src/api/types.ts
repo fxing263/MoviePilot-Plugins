@@ -1,0 +1,2872 @@
+/** 主程序内置的媒体来源常量；插件可以注册额外的稳定来源标识。 */
+export enum MediaSource {
+  TMDB = 'themoviedb',
+  Douban = 'douban',
+  Bangumi = 'bangumi',
+  AniList = 'anilist',
+  IMDb = 'imdb',
+  TVDB = 'tvdb',
+  MusicBrainz = 'musicbrainz',
+  TheAudioDB = 'theaudiodb',
+  DoubanMusic = 'doubanmusic',
+  Bilibili = 'bilibili',
+  MangoTV = 'mangguodiscover',
+  MiguVideo = 'migu',
+  TencentVideo = 'tencentvideodiscover',
+}
+
+export type MediaDataSource = `${MediaSource}` | (string & {})
+
+/** 后端返回的媒体来源注册描述，供各类来源选择器共享。 */
+export interface MediaSourceInfo {
+  name: string
+  media_source: MediaDataSource
+  media_types: string[]
+}
+
+/** 后端注册的宿主模块及其可选服务类型目录项。 */
+export interface ModuleCatalogInfo {
+  id: string
+  name: string
+  name_i18n: string
+  name_key: string
+  description_i18n: string
+  description_key: string
+  type: string
+  subtype: string
+  option_value?: string | null
+  enabled: boolean
+  active: boolean
+}
+
+/** 订阅跨搜索与下载链路的当前业务状态。 */
+export interface SubscriptionExecutionStatus {
+  state: string
+  phase: string
+  updated_at: string
+  source?: string
+  batch_id?: string
+  task_id?: string
+  current_site_id?: number
+  next_run_at?: string
+  error?: string
+  can_cancel: boolean
+}
+
+/** 用户主动发起订阅搜索后的安排结果。 */
+export interface SubscriptionSearchSubmission {
+  batch_id?: string
+  batch_ids: string[]
+  target_count: number
+  queued_count: number
+  ongoing_count: number
+  single: boolean
+}
+
+/** 订阅搜索批次的聚合进度与当前工作。 */
+export interface SubscriptionBatchStatus {
+  batch_id: string
+  source: string
+  state: string
+  phase: string
+  total_count: number
+  processed_count: number
+  finished_count: number
+  failed_count: number
+  cancelled_count: number
+  /** 未执行业务动作而结束的任务数，例如同订阅准入冲突。 */
+  skipped_count: number
+  created_at: string
+  updated_at: string
+  current_subscription_id?: number
+  current_site_id?: number
+  error?: string
+  can_cancel: boolean
+}
+
+/** 自动分类中的单个推荐或生效选择快照。 */
+export interface MediaClassificationSelection {
+  category_id?: string
+  category_path?: string[]
+  rule_id?: string
+  source?: string
+}
+
+/** 媒体对象携带的分类结果快照。 */
+export interface MediaClassificationResult {
+  recommended?: MediaClassificationSelection
+  effective?: MediaClassificationSelection
+  labels?: string[]
+  policy_revision?: number
+  state?: 'complete' | 'partial' | 'not_evaluated' | 'invalid_policy'
+}
+
+// 手动刮削选项
+export interface ManualScrapeOptions {
+  // 媒体数据源
+  media_source: MediaDataSource
+  // 数据源原生ID
+  media_id?: string
+  // 媒体类型
+  type_name?: string
+  // 音乐实体类型
+  music_type?: MusicEntityType
+}
+
+// 订阅
+export interface Subscribe {
+  /** 独立定时搜索间隔（小时）；null 或缺省跟随系统。 */
+  search_interval?: number | null
+  // 订阅ID
+  id: number
+  // 订阅名称
+  name: string
+  // 订阅年份
+  year: string
+  // 订阅类型 电影/电视剧/音乐
+  type: string
+  // 搜索关键字
+  keyword?: string
+  // 主媒体数据源
+  media_source?: MediaDataSource
+  // 数据源原生ID
+  media_id?: string
+  // 音乐实体类型：recording 单曲、album 专辑、artist 艺术家
+  music_type?: MusicEntityType
+  // 专辑总曲目数
+  total_tracks?: number
+  // 专辑已累计下载曲目数
+  completed_tracks?: number
+  // 季号
+  season?: number
+  // 海报
+  poster?: string
+  // 背景图
+  backdrop?: string
+  // 评分
+  vote?: number
+  // 描述
+  description?: string
+  // 过滤规则
+  filter?: string
+  // 包含
+  include?: string
+  // 排除
+  exclude?: string
+  // 质量
+  quality?: string
+  // 分辨率
+  resolution?: string
+  // 特效
+  effect?: string
+  // 音乐音质等级正则
+  audio_quality?: string
+  // 音频格式正则
+  audio_format?: string
+  // 最低码率（bps）
+  min_bitrate?: number
+  // 最低位深（bit）
+  min_bit_depth?: number
+  // 最低采样率（Hz）
+  min_sample_rate?: number
+  // 总集数
+  total_episode?: number
+  // 开始集数
+  start_episode?: number
+  // 缺失集数
+  lack_episode?: number
+  // 已完成集数（普通订阅 = 已入库集数，洗版订阅 = 起始集前 + [start, total] 范围内 priority==100 命中数）
+  completed_episode?: number
+  // 附加信息
+  note?: string | number[]
+  // 状态：N-新建 R-订阅中 P-待定 S-暂停
+  state: string
+  // 最后更新时间
+  last_update: string
+  // 订阅用户
+  username: string
+  // 订阅站点
+  sites: number[]
+  // 是否洗版，数字或者boolean
+  best_version: any
+  // 是否只洗全集整包，数字或者boolean
+  best_version_full?: any
+  // 使用 imdbid 搜索
+  search_imdbid?: any
+  // 当前优先级
+  current_priority: number
+  // 当前音乐版本格式
+  current_audio_format?: string
+  // 当前音乐版本码率（bps）
+  current_bitrate?: number
+  // 当前音乐版本位深（bit）
+  current_bit_depth?: number
+  // 当前音乐版本采样率（Hz）
+  current_sample_rate?: number
+  // 洗版时已下载剧集的优先级状态
+  episode_priority?: Record<string, number>
+  // 保存目录
+  save_path?: string
+  // 时间
+  date: string
+  // 编辑框设置项
+  show_edit_dialog: boolean
+  // 编辑框打开状态
+  page_open?: boolean
+  // 自定义识别词
+  custom_words?: string
+  // 自定义媒体类别
+  media_category?: string
+  // 过滤规则组
+  filter_groups?: string[]
+  // 下载器
+  downloader?: string
+  // 自定义剧集组
+  episode_group?: string
+  // 当前搜索或下载执行状态
+  execution_status?: SubscriptionExecutionStatus
+}
+
+/** 订阅删除成功后的机器可判断结果。 */
+export interface SubscribeDeletionResult {
+  // 数据库删除事务已提交
+  status: 'deleted'
+}
+
+// 订阅分享
+export interface SubscribeShare {
+  // 分享ID
+  id?: number
+  // 订阅ID
+  subscribe_id?: number
+  // 分享标题
+  share_title?: string
+  // 分享说明
+  share_comment?: string
+  // 分享人
+  share_user?: string
+  // 分享人唯一ID
+  share_uid?: string
+  // 订阅名称
+  name?: string
+  // 订阅年份
+  year?: string
+  // 订阅类型 电影/电视剧
+  type?: string
+  // 搜索关键字
+  keyword?: string
+  // 主媒体数据源
+  media_source?: MediaDataSource
+  // 数据源原生ID
+  media_id?: string
+  // 音乐实体类型：recording 单曲、album 专辑、artist 艺术家
+  music_type?: MusicEntityType
+  // 专辑总曲目数
+  total_tracks?: number
+  // 季号
+  season?: number
+  // 海报
+  poster?: string
+  // 背景图
+  backdrop?: string
+  // 评分
+  vote?: number
+  // 描述
+  description?: string
+  // 过滤规则
+  filter?: string
+  // 包含
+  include?: string
+  // 排除
+  exclude?: string
+  // 质量
+  quality?: string
+  // 分辨率
+  resolution?: string
+  // 特效
+  effect?: string
+  // 总集数
+  total_episode?: number
+  // 时间
+  date?: string
+  // 自定义识别词
+  custom_words?: string
+  // 自定义媒体类别
+  media_category?: string
+  // 复用次数
+  count?: number
+  // 自定义剧集组
+  episode_group?: string
+}
+
+// 工作流分享
+export interface WorkflowShare {
+  // 分享ID
+  id?: string
+  // 工作流ID
+  workflow_id?: string
+  // 分享标题
+  share_title?: string
+  // 分享说明
+  share_comment?: string
+  // 分享人
+  share_user?: string
+  // 分享人唯一ID
+  share_uid?: string
+  // 工作流名称
+  name?: string
+  // 工作流描述
+  description?: string
+  // 定时器
+  timer?: string
+  // 触发类型：timer-定时触发 event-事件触发 manual-手动触发
+  trigger_type?: string
+  // 事件类型（当trigger_type为event时使用）
+  event_type?: string
+  // 动作列表
+  actions?: any[]
+  // 动作流
+  flows?: any[]
+  // 上下文
+  context?: string
+  // 时间
+  date?: string
+  // 复用次数
+  count?: number
+}
+
+// 历史记录
+export interface TransferHistory {
+  // ID
+  id: number
+  // 源存储
+  src_storage?: string
+  // 目标存储
+  dest_storage?: string
+  // 源目录
+  src?: string
+  // 目的目录
+  dest?: string
+  // 转移模式link/copy/move/softlink/rclone_copy/rclone_move
+  mode?: string
+  // 类型：电影、电视剧
+  type?: string
+  // 二级分类
+  category?: string
+  // 标题
+  title?: string
+  // 年份
+  year?: string
+  // 媒体数据源
+  media_source?: MediaDataSource
+  // 数据源原生ID
+  media_id?: string
+  // 季Sxx
+  seasons?: string
+  // 集Exx
+  episodes?: string
+  // 海报
+  image?: string
+  // 下载器Hash
+  download_hash?: string
+  // 状态 1-成功，0-失败
+  status: boolean
+  // 与历史关联的持久整理任务，用于显式解除失效绑定。
+  transfer_task_id?: string
+  // 失败原因
+  errmsg?: string
+  // 失败阶段
+  failure_stage?: string
+  // 建议恢复动作
+  recovery_action?: string
+  // 当前文件版本的失败次数
+  retry_count?: number
+  // 是否已达到自动重试上限
+  retry_exhausted?: boolean
+  // 自动整理是否已暂停
+  auto_paused?: boolean
+  // 下载器清理状态
+  cleanup_status?: 'pending' | 'succeeded' | 'failed' | 'resolved' | null
+  // 下载器清理错误
+  cleanup_error?: string
+  // 日期
+  date?: string
+  // 音乐实体类型
+  music_type?: MusicEntityType
+  // 专辑预期总曲目数
+  total_tracks?: number
+  // 实际音频格式
+  audio_format?: string
+  // 是否无损音频
+  audio_lossless?: boolean
+  // 实际位深（bit）
+  bit_depth?: number
+  // 实际采样率（Hz）
+  sample_rate?: number
+  // 实际码率（bps）
+  bitrate?: number
+  // 源文件项
+  src_fileitem?: FileItem
+}
+
+/** 整理历史删除的单个文件步骤状态。 */
+export type TransferHistoryDeleteStepStatus = 'not_requested' | 'deleted' | 'already_missing' | 'failed'
+
+/** 后端返回的整理历史删除分项结果，供失败重试和用户反馈复用。 */
+export interface TransferHistoryDeleteResult {
+  source: {
+    status: TransferHistoryDeleteStepStatus
+    message?: string
+  }
+  destination: {
+    status: TransferHistoryDeleteStepStatus
+    message?: string
+  }
+  history: 'deleted' | 'retained' | 'not_found'
+  message?: string
+}
+
+// 下载历史记录
+export interface DownloadHistory {
+  // ID
+  id: number
+  // 保存路径
+  path?: string
+  // 类型：电影、电视剧
+  type?: string
+  // 标题
+  title?: string
+  // 年份
+  year?: string
+  // 媒体数据源
+  media_source?: MediaDataSource
+  // 数据源原生 ID
+  media_id?: string
+  // 音乐实体类型：recording/album/artist
+  music_type?: MusicEntityType
+  // 季 Sxx
+  seasons?: string
+  // 集 Exx
+  episodes?: string
+  // 背景图
+  image?: string
+  // 海报
+  poster?: string
+  // 下载器 Hash
+  download_hash?: string
+  // 下载器实例
+  downloader?: string
+  // 种子名称
+  torrent_name?: string
+  // 种子描述
+  torrent_description?: string
+  // 站点
+  torrent_site?: string
+  // 下载用户 ID
+  userid?: string
+  // 下载用户名或插件名
+  username?: string
+  // 下载渠道
+  channel?: string
+  // 创建时间
+  date?: string
+  // 附加信息
+  note?: unknown
+  // 自定义媒体类别
+  media_category?: string
+  // 自定义剧集组
+  episode_group?: string
+}
+
+// 媒体信息
+export interface MediaInfo {
+  // 主媒体数据源
+  media_source?: MediaDataSource
+  // 类型 电影、电视剧、音乐、合集
+  type?: string
+  // 媒体标题
+  title?: string
+  // 年份（音乐等数据源返回数字，订阅接口要求字符串）
+  year?: string | number
+  // 标题（年）
+  title_year?: string
+  // 季号
+  season?: number
+  // TMDB ID
+  tmdb_id?: number
+  // IMDB ID
+  imdb_id?: string
+  // TVDB ID
+  tvdb_id?: string
+  // TVDB Slug（别名，用于构建 TheTvDb 直达链接）
+  tvdb_slug?: string
+  // 豆瓣ID
+  douban_id?: string
+  // Bangumi ID
+  bangumi_id?: string | number
+  // AniList ID
+  anilist_id?: number
+  // AniDB ID
+  anidb_id?: number
+  // 合集ID
+  collection_id?: number
+  // 主媒体数据源的原生 ID
+  media_id?: string
+  // 媒体原语种
+  original_language?: string
+  // 媒体原发行标题
+  original_title?: string
+  // 媒体发行日期
+  release_date?: string
+  // 背景图片
+  backdrop_path?: string
+  // 海报图片
+  poster_path?: string
+  // 评分
+  vote_average?: number
+  // 描述
+  overview?: string
+  // 媒体库目录分类
+  library_category?: string
+  // 数据源提供的描述性分类
+  metadata_category?: string
+  // 本次分类结果快照
+  classification?: MediaClassificationResult
+  // 媒体库目录分类兼容字段
+  category?: string
+  // 详情页面
+  detail_link?: string
+  // 季详情
+  season_info?: TmdbSeason[]
+  // 导演
+  directors?: any[]
+  // 演员
+  actors?: any[]
+  // 成人内容
+  adult?: boolean
+  // 创建人
+  created_by?: string[]
+  // 集时长
+  episode_run_time: string[]
+  // 风格
+  genres?: string[]
+  // 首映日期
+  first_air_date?: string
+  // 主页
+  homepage?: string
+  // 语言
+  languages?: string[]
+  // 最后更新日期
+  last_air_date?: string
+  // 流媒体
+  networks?: string[]
+  // 总集数
+  number_of_episodes?: number
+  // 总季数
+  number_of_seasons?: number
+  // 原产国
+  origin_country: string[]
+  // 原名
+  original_name?: string
+  // 出品公司
+  production_companies?: any[]
+  // 出品国
+  production_countries?: any[]
+  // 语种
+  spoken_languages?: string[]
+  // 数字/实体发行日期
+  release_dates?: MediaRelease[]
+  // 状态
+  status?: string
+  // 标签
+  tagline?: string
+  // 评分人数
+  vote_count?: number
+  // 流行度
+  popularity?: number
+  // 时长
+  runtime?: number
+  // 下一集
+  next_episode_to_air?: object
+  // 别名
+  names?: string[]
+  // 剧集组
+  episode_group?: string
+  // 音乐艺术家列表
+  artists?: string[]
+  // 音乐艺术家展示文本
+  artist?: string
+  // 音乐实体类型：recording 单曲、album 专辑、artist 艺术家
+  music_type?: MusicEntityType
+  // 音乐艺术家标准ID，顺序与 artists 一致
+  artist_ids?: string[]
+  // 专辑
+  album?: string
+  // 专辑艺术家
+  album_artist?: string
+  // 所属专辑标准ID
+  album_id?: string
+  // 专辑主类型：Album、EP、Single 等
+  album_type?: string
+  // 专辑副类型：Live、Compilation、Soundtrack 等
+  secondary_types?: string[]
+  // 音乐标签
+  tags?: string[]
+  // 艺术家国家或地区
+  artist_country?: string
+  // 发行状态
+  release_status?: string
+  // 发行版本
+  version?: string
+  // 音轨号
+  track_number?: number
+  // 碟号
+  disc_number?: number
+  // 总音轨数
+  total_tracks?: number
+  // 音轨时长（秒）
+  duration?: number
+  // ISRC
+  isrc?: string
+  // 音乐封面
+  cover_url?: string
+  // ListenBrainz 收听次数
+  listen_count?: number
+  // 音频格式
+  audio_format?: string
+  // 是否无损音频
+  audio_lossless?: boolean
+  // 音质等级
+  audio_quality?: 'hires' | 'lossless' | 'lossy'
+  // 音质洗版分数
+  audio_quality_score?: number
+  // 格式化音频参数
+  audio_specs?: string
+  // 音频位深
+  bit_depth?: number
+  // 音频采样率
+  sample_rate?: number
+  // 音频码率
+  bitrate?: number
+}
+
+// 音乐作品在媒体库中的存在状态
+export interface MusicLibraryStatus {
+  media_source: MediaDataSource
+  media_id: string
+  exists: boolean
+}
+
+// 音乐可浏览实体类型
+export type MusicEntityType = 'recording' | 'album' | 'artist'
+
+// 音乐专辑下的单个发行版本
+export interface MusicRelease {
+  // 发行版本标准ID
+  media_id?: string
+  // 发行版本名称
+  title?: string
+  // 发行日期
+  date?: string
+  // 发行年份
+  year?: number
+  // 发行地区
+  country?: string
+  // 发行状态：Official、Promotion 等
+  status?: string
+  // 包装形式
+  packaging?: string
+  // 介质格式：CD、Vinyl 等
+  formats?: string[]
+  // 音轨总数
+  track_count?: number
+  // 封面
+  cover_url?: string
+}
+
+// 音乐专辑详情
+export interface MusicAlbumInfo {
+  // 类型，固定为音乐
+  type?: string
+  // 实体类型，固定为 album
+  music_type?: MusicEntityType
+  // 媒体数据源
+  media_source?: MediaDataSource
+  // 专辑标准ID
+  media_id?: string
+  // 专辑名称
+  title?: string
+  // 艺术家列表
+  artists?: string[]
+  // 艺术家展示文本
+  artist?: string
+  // 艺术家标准ID，顺序与 artists 一致
+  artist_ids?: string[]
+  // 专辑名称，与 title 一致，便于复用音乐展示组件
+  album?: string
+  // 专辑主类型
+  album_type?: string
+  // 专辑副类型
+  secondary_types?: string[]
+  // 首次发行年份
+  year?: number
+  // 首次发行日期
+  release_date?: string
+  // 音轨总数
+  total_tracks?: number
+  // 专辑总时长（秒）
+  duration?: number
+  // 封面
+  cover_url?: string
+  // 风格
+  genres?: string[]
+  // 标签
+  tags?: string[]
+  // 媒体库目录分类
+  library_category?: string
+  // 主类型与副类型组合文本
+  metadata_category?: string
+  // 本次分类结果快照
+  classification?: MediaClassificationResult
+  // 媒体库目录分类兼容字段
+  category?: string
+  // 10 分制评分
+  rating?: number
+  // 评分人数
+  rating_votes?: number
+  // 详情页面
+  detail_link?: string
+  // 专辑内的音乐
+  tracks?: MediaInfo[]
+  // 同一专辑的其它发行版本
+  releases?: MusicRelease[]
+  // 海报
+  poster_path?: string
+  // 背景图
+  backdrop_path?: string
+  // 摘要
+  overview?: string
+}
+
+// 音乐艺术家详情
+export interface MusicArtistInfo {
+  // 类型，固定为音乐
+  type?: string
+  // 实体类型，固定为 artist
+  music_type?: MusicEntityType
+  // 媒体数据源
+  media_source?: MediaDataSource
+  // 艺术家标准ID
+  media_id?: string
+  // 艺术家名称
+  name?: string
+  // 名称，与 name 一致，便于复用通用展示组件
+  title?: string
+  // 排序名称
+  sort_name?: string
+  // 消歧义说明
+  disambiguation?: string
+  // 艺术家类型：Person、Group 等
+  artist_type?: string
+  // 性别
+  gender?: string
+  // 国家代码
+  country?: string
+  // 地区
+  area?: string
+  // 出道或成立日期
+  begin_date?: string
+  // 解散或去世日期
+  end_date?: string
+  // 是否已结束活动
+  ended?: boolean
+  // 活跃时间区间文本
+  life_span?: string
+  // 风格
+  genres?: string[]
+  // 标签
+  tags?: string[]
+  // 别名
+  aliases?: string[]
+  // 与当前艺术家的关系文本
+  relation?: string
+  // 艺术家图片
+  image_url?: string
+  // 详情页面
+  detail_link?: string
+  // 外部站点链接
+  external_links?: Record<string, string>
+  // 海报
+  poster_path?: string
+  // 摘要
+  overview?: string
+}
+
+// 季信息
+export interface MediaSeason {
+  // 上映日期
+  air_date?: string
+  // 总集数
+  episode_count?: number
+  // 季名称
+  name?: string
+  // 描述
+  overview?: string
+  // 海报
+  poster_path?: string
+  // 季号
+  season_number?: number
+  // 评分
+  vote_average?: number
+}
+
+// TMDB季信息
+export interface TmdbSeason {
+  // 上映日期
+  air_date?: string
+  // 总集数
+  episode_count?: number
+  // 季名称
+  name?: string
+  // 描述
+  overview?: string
+  // 海报
+  poster_path?: string
+  // 季号
+  season_number?: number
+  // 评分
+  vote_average?: number
+}
+
+// 发行信息
+export interface MediaRelease {
+  // 发行日期
+  date: string
+  // 发行地区
+  iso_code: string
+  // 备注
+  note?: string
+  // 发行类型
+  type: number
+}
+
+// TMDB集信息
+export interface TmdbEpisode {
+  // 上映日期
+  air_date?: string
+  // 集号
+  episode_number?: number
+  // 剧集名称
+  name?: string
+  // 描述
+  overview?: string
+  // 时长
+  runtime?: number
+  // 季号
+  season_number?: number
+  // 海报
+  still_path?: string
+  // 评分
+  vote_average?: number
+  // 演职人员
+  crew: Object[]
+  // 嘉宾
+  guest_stars: Object[]
+}
+
+// TMDB人物信息
+export interface Person {
+  // 来源：themoviedb、douban、bangumi、anilist
+  source?: string
+  // ID
+  id?: number
+  // 名称
+  name?: string
+  // 角色
+  character?: string
+  // 性别
+  gender?: number | string
+  // 生日
+  birthday?: string
+  // 详情
+  biography?: string
+  // images large/normal douban、bangumi
+  images?: { [key: string]: string }
+  // themoviedb
+  // themoviedb图片
+  profile_path?: string
+  // 原名
+  original_name?: string
+  // 演员ID
+  credit_id?: string
+  // 别名
+  also_known_as?: string[]
+  // 卒日
+  deathday?: string
+  // IMDB ID
+  imdb_id?: string
+  // 部门
+  known_for_department?: string
+  // 出生地
+  place_of_birth?: string
+  // 热度
+  popularity?: number
+  // douban
+  // 角色
+  roles?: string[]
+  // 简介
+  title?: string
+  // 详情页面
+  url?: string
+  // 图片
+  avatar?: any
+  // 别名
+  latin_name?: string
+  // bangumi
+  // 类型
+  type?: number | string
+  // 角色
+  career?: string[]
+  // 关系
+  relation?: string
+}
+
+/** 全局演员/艺术家搜索返回的影视人物或音乐艺术家。 */
+export type PersonSearchResult = Person | MusicArtistInfo
+
+// 站点
+export interface Site {
+  // ID
+  id: number
+  // 站点名称
+  name: string
+  // 站点主域名Key
+  domain: string
+  // 站点地址
+  url: string
+  // 站点优先级
+  pri?: number
+  // RSS地址
+  rss?: string
+  // 下载器
+  downloader: string
+  // Cookie
+  cookie?: string
+  // ApiKey
+  apikey?: string
+  // Token
+  token?: string
+  // User-Agent
+  ua?: string
+  // 是否使用代理
+  proxy?: any
+  // 过滤规则
+  filter?: string
+  // 是否演染
+  render?: any
+  // 是否公开站点
+  public?: number
+  // 备注
+  note?: string
+  // 超时时间
+  timeout?: number
+  // 流控单位周期
+  limit_interval?: number
+  // 流控次数
+  limit_count?: number
+  // 流控间隔
+  limit_seconds?: number
+  // 是否启用
+  is_active: boolean
+}
+
+// 站点使用统计
+export interface SiteStatistic {
+  // 站点主域名Key
+  domain?: string
+  // 成功次数
+  success?: number
+  // 失败次数
+  fail?: number
+  // 平均耗时
+  seconds?: number
+  // 最后一次访问状态 0-成功 1-失败
+  lst_state?: number
+  // 最后访问时间
+  lst_mod_date?: string
+  // 耗时记录 JSON
+  note?: string
+}
+
+// 站点用户数据
+export interface SiteUserData {
+  // 站点域名
+  domain?: string
+  // 用户名
+  username?: string
+  // 用户ID
+  userid?: string
+  // 用户等级
+  user_level?: string
+  // 加入时间
+  join_at?: string
+  // 积分
+  bonus?: number // 默认为 0.0
+  // 上传量
+  upload?: number // 默认为 0
+  // 下载量
+  download?: number // 默认为 0
+  // 分享率
+  ratio?: number // 默认为 0
+  // 做种数
+  seeding?: number // 默认为 0
+  // 下载数
+  leeching?: number // 默认为 0
+  // 做种体积
+  seeding_size?: number // 默认为 0
+  // 下载体积
+  leeching_size?: number // 默认为 0
+  // 做种人数, 种子大小
+  seeding_info?: any[] // 默认为空数组
+  // 未读消息
+  message_unread?: number // 默认为 0
+  // 未读消息内容
+  message_unread_contents?: any[] // 默认为空数组
+  // 错误信息
+  err_msg?: string | null // 默认为 null
+  // 更新日期
+  updated_day?: string
+  // 更新时间
+  updated_time?: string
+}
+
+// 正在下载
+export interface DownloadingInfo {
+  // 下载器实例名称
+  downloader?: string
+  // HASH
+  hash?: string
+  // 种子名称
+  title?: string
+  // 识别后的名称
+  name?: string
+  // 年份
+  year?: string
+  // SXXEXX
+  season_episode?: string
+  // 大小
+  size?: number
+  // 下载进 度
+  progress?: number
+  // 状态
+  state?: string
+  // 下载速度
+  dlspeed?: string
+  // 上传速度
+  upspeed?: string
+  // 标签，下载器返回逗号分隔文本
+  tags?: string
+  // 保存目录
+  save_path?: string
+  // 内容目录
+  content_path?: string
+  // 下载器分类
+  category?: string
+  // 下载限速（KB/s）
+  download_limit?: number
+  // 上传限速（KB/s）
+  upload_limit?: number
+  // 分享率限制
+  ratio_limit?: number
+  // 做种时间限制（分钟）
+  seeding_time_limit?: number
+  // Tracker 地址
+  trackers?: string[]
+  // 来源站点
+  site_name?: string
+  // 媒体信息
+  media: { [key: string]: any }
+  // 下载用户ID
+  userid?: string
+  // 下载用户名称
+  username?: string
+  // 剩余时间
+  left_time?: string
+}
+
+/** 下载任务高级修改请求。 */
+export interface DownloadTaskUpdateRequest {
+  tags?: string[]
+  downloader?: string
+  download_limit?: number
+  upload_limit?: number
+  trackers?: string[]
+  save_path?: string
+  category?: string
+  ratio_limit?: number
+  seeding_time_limit?: number
+}
+
+/** 下载任务单项修改结果。 */
+export interface DownloadTaskMutationResult {
+  operation: string
+  success: boolean
+  message: string
+}
+
+/** 下载任务高级修改聚合结果。 */
+export interface DownloadTaskUpdateData {
+  hash: string
+  downloader: string
+  results: DownloadTaskMutationResult[]
+}
+
+/** 资源目录按媒体类别重新定位的预览或执行结果。 */
+export interface DownloadSourceClassificationData {
+  hash: string
+  downloader: string
+  current_save_path: string
+  target_save_path: string
+  category: string
+  changed: boolean
+  executed: boolean
+}
+
+// 缺失剧集信息
+export interface NotExistMediaInfo {
+  // 季
+  season: number
+  // 剧集列表
+  episodes: number[]
+  // 总集数
+  total_episode: number
+  // 开始集
+  start_episode: number
+}
+
+// 插件
+export interface Plugin {
+  id: string
+  // 插件名称
+  plugin_name: string
+  // 插件描述
+  plugin_desc?: string
+  // 插件图标
+  plugin_icon?: string
+  // 插件标签，多个以,分隔
+  plugin_label?: string
+  // 插件版本
+  plugin_version?: string
+  // 插件作者
+  plugin_author?: string
+  // 作者主页
+  author_url?: string
+  // 插件配置项ID前缀
+  plugin_config_prefix?: string
+  // 加载顺序
+  plugin_order?: number
+  // 可使用的用户级别
+  auth_level?: number
+  // 是否已安装
+  installed?: boolean
+  // 运行状态
+  state?: boolean
+  // 插件源码、依赖和运行时加载状态
+  runtime_status?:
+    'sync_failed' | 'source_missing' | 'dependency_pending' | 'ready' | 'active' | 'blocked_by_policy' | 'load_failed'
+  // 是否有详情页面
+  has_page?: boolean
+  // 是否有新版本
+  has_update?: boolean
+  // 当前市场发现的最高在线更新候选
+  update_candidate?: PluginUpdateCandidate | null
+  // 在线更新仓库绑定状态
+  source_binding_status?: 'bound' | 'binding_required' | 'local_only'
+  // 主系统版本是否兼容
+  system_version_compatible?: boolean
+  // 主系统版本兼容提示
+  system_version_message?: string
+  // 主系统版本限定范围
+  system_version?: string
+  // 是否声明支持通过 GitHub Release 资产安装
+  release?: boolean
+  // 是否本地插件
+  is_local?: boolean
+  // 插件仓库地址
+  repo_url?: string
+  // 变更历史
+  history?: { [key: string]: string }
+  // 添加时间
+  add_time?: number
+  // 页面打开状态
+  page_open?: boolean
+  // 平均评分
+  average_rating?: number
+  // 评分人数
+  rating_count?: number
+  // 当前安装实例评分
+  user_rating?: number | null
+  // 共享代码和联邦资源的源插件 ID
+  source_plugin_id?: string
+  // 是否为共享源码的虚拟实例
+  is_instance?: boolean
+  // 实例实现模式
+  instance_mode?: 'virtual'
+  // 该实例是否为所属插件的默认调用目标
+  is_default_target?: boolean
+}
+
+/** 插件市场为已安装插件选择的当前更新候选。 */
+export interface PluginUpdateCandidate {
+  // 候选仓库是官方来源还是第三方来源
+  source_type: 'official' | 'third_party'
+  // 候选仓库的规范来源键
+  source_key: string
+  // 候选仓库的公开 GitHub 地址
+  repo_url: string
+  // 候选仓库当前可安装版本
+  version: string
+  // 候选仓库是否为插件当前已绑定仓库
+  is_bound: boolean
+}
+
+/** 已绑定插件可用于自动更新的在线来源类型。 */
+export type PluginTrustedSourceType = 'unknown' | 'official' | 'third_party'
+
+/** 最近一次已应用插件载荷的来源类型，包含本地开发来源。 */
+export type PluginPayloadSourceType = PluginTrustedSourceType | 'local'
+
+/** 已安装插件来源身份建立时采用的依据。 */
+export type PluginSourceBindingBasis =
+  'legacy_unbound' | 'local_only' | 'official_default' | 'tofu' | 'explicit_install' | 'explicit_source_change'
+
+/** 来源候选的展示类型；本地候选只展示为本地，不暴露路径。 */
+export type PluginSourceCandidateType = 'official' | 'third_party' | 'local'
+
+/** 显式换源确认所需的当前可信来源身份和并发控制版本。 */
+export interface PluginSourceIdentity {
+  // 物理插件 ID
+  plugin_id: string
+  // 当前可信在线来源类型
+  trusted_source_type: PluginTrustedSourceType
+  // 规范化的可信在线来源键；未绑定时为空
+  trusted_source_key?: string | null
+  // 当前可信来源的建立依据
+  binding_basis: PluginSourceBindingBasis
+  // 最近一次已提交载荷的来源类型
+  payload_source_type: PluginPayloadSourceType
+  // 最近一次在线载荷的来源键；本地或未知载荷为空
+  payload_source_key?: string | null
+  // 显式换源使用的身份 CAS revision
+  revision: number
+}
+
+/** 一个可供管理员识别的脱敏插件来源候选。 */
+export interface PluginSourceCandidate {
+  // 来源类型
+  source_type: PluginSourceCandidateType
+  // 规范化在线来源键；本地候选为空
+  source_key?: string | null
+  // 可明确选择的在线仓库地址或本地仓库标识
+  repo_url?: string | null
+  // 当前运行时会采用的插件包代际
+  package_generation: 'v1' | 'v2' | 'v3'
+  // 该来源当前可安装的插件版本
+  plugin_version?: string | null
+}
+
+/** 来源选择界面所需的当前身份、候选和准入状态。 */
+export interface PluginSourceOptions {
+  // 物理插件 ID
+  plugin_id: string
+  // 本轮配置市场是否全部得到确定读取结果
+  inventory_complete: boolean
+  // 未指定新来源时的当前准入状态
+  selection_status: 'selected' | 'unavailable' | 'conflict' | 'incomplete'
+  // 当前准入状态的人类可读原因
+  selection_reason: string
+  // 已安装插件的来源身份；未建立身份时为空
+  identity?: PluginSourceIdentity | null
+  // 按来源归并后的在线候选及可选本地候选
+  candidates: PluginSourceCandidate[]
+}
+
+/** 管理员为未绑定插件明确选择初始在线来源的请求参数。 */
+export interface PluginSourceInstallRequest {
+  // 明确选择的目标插件仓库地址
+  repo_url: string
+  // 指定安装的 Release 资产版本；为空时使用当前索引版本
+  release_version?: string | null
+  // 是否强制重新下载并安装所选来源载荷
+  force?: boolean
+}
+
+/** 管理员显式切换插件在线来源的请求参数。 */
+export interface PluginSourceChangeRequest {
+  // 明确选择的目标插件仓库地址
+  repo_url: string
+  // 提交换源时必须匹配的当前身份 revision
+  expected_revision: number
+  // 指定安装的 Release 资产版本；为空时使用当前索引版本
+  release_version?: string | null
+}
+
+/** 已安装插件完成来源确认后产生的仓库变更意图。 */
+export type PluginSourceTransition =
+  | {
+      // 为存量未绑定插件建立初始可信仓库
+      action: 'bind'
+      // 管理员明确选择的目标插件仓库地址
+      repo_url: string
+    }
+  | {
+      // 把已绑定插件切换到另一个可信仓库
+      action: 'change'
+      // 管理员明确选择的目标插件仓库地址
+      repo_url: string
+      // 提交换仓时必须匹配的当前身份 revision
+      expected_revision: number
+    }
+
+export interface PluginRuntimeSummary {
+  // 本轮插件源码、依赖和加载是否已收敛
+  ready: boolean
+  // 插件运行状态变化代次
+  generation: number
+  // 仍处于准备阶段的插件数量
+  pending_count: number
+  // 加载失败或被策略阻止的插件数量
+  failed_count: number
+  // 重启后才能完整激活新原生依赖的物理插件 ID
+  restart_required_plugin_ids: string[]
+}
+
+/** 插件安装、更新或换仓后的运行态结果。 */
+export interface PluginInstallOutcome {
+  // 当前进程未能完整激活新安装的原生依赖
+  restart_required: boolean
+}
+
+// 插件评分结果
+export interface PluginRating {
+  plugin_id: string
+  average_rating: number
+  rating_count: number
+  user_rating?: number | null
+}
+
+// 插件 Release 可安装版本
+export interface PluginReleaseVersion {
+  // 插件版本
+  version: string
+  // GitHub Release tag
+  tag_name: string
+  // Release 标题
+  name?: string
+  // 发布时间
+  published_at?: string
+  // Release 说明
+  body?: string
+  // 匹配到的资产文件名
+  asset_name?: string
+  // 是否为当前市场最新版本
+  is_latest?: boolean
+  // 是否为本地已安装版本
+  is_current?: boolean
+}
+
+// 插件 Release 可安装版本响应
+export interface PluginReleaseVersionsResponse {
+  // 当前插件是否存在可直接安装的 Release 资产
+  release_supported: boolean
+  // 当前市场 package 声明的最新版本
+  latest_version?: string | null
+  // 本地已安装版本
+  current_version?: string | null
+  // 可安装版本列表
+  items: PluginReleaseVersion[]
+}
+
+/** 单个插件实例的日志等级设置与生效结果。 */
+export interface PluginInstanceLogLevel {
+  // 实例 ID
+  instance_id: string
+  // 该实例设置的日志等级覆盖，为空表示未设置或已过期
+  configured_level?: string | null
+  // 日志等级覆盖的失效时间，为空表示不过期
+  expires_at?: string | null
+  // 按过期回落判定后实际生效的日志等级
+  effective_level: string
+}
+
+/** 插件全部实例（含本体）的日志等级设置总览。 */
+export interface PluginInstanceLogLevelOverview {
+  // 插件 ID
+  plugin_id: string
+  // 该插件全部实例的日志等级设置，首项固定是本体自身
+  instances: PluginInstanceLogLevel[]
+}
+
+/** 设置插件实例日志等级覆盖的请求参数。 */
+export interface PluginInstanceLogLevelUpdateRequest {
+  // 目标日志等级，取值为 DEBUG、INFO、WARNING、ERROR、CRITICAL
+  level: string
+  // 覆盖失效时间，为空表示不过期
+  expires_at?: string | null
+}
+
+/** 启用或停用一个插件实例的请求参数。 */
+export interface PluginInstanceEnabledRequest {
+  // 目标启用状态；置假即停用，配置与展示信息原样留存
+  enabled: boolean
+}
+
+/**
+ * 创建或恢复一个插件分身的请求参数。
+ *
+ * 创建与恢复共用同一个端点：填上某个已停用分身的后缀，提交的就是恢复那一行。
+ */
+export interface PluginCloneRequest {
+  // 分身后缀；不传、为空或纯空白时由服务端自动分配一个未被占用的号
+  suffix?: string | null
+  // 分身展示名称；恢复场景留空表示沿用停用前登记的那份，新建场景留空即为空
+  name?: string
+  // 分身描述；留空的两种语义与 name 相同
+  description?: string
+  // 分身图标；留空的两种语义与 name 相同
+  icon?: string
+  // 该后缀名下有已停用的分身时，是否沿用它留存的业务参数；置假即丢弃旧配置按模板重建
+  restore_previous?: boolean
+}
+
+/**
+ * 创建或恢复插件分身的回执。
+ *
+ * 不填后缀时前端算不出服务端分配到的号，实例 ID 只能从这里取。
+ */
+export interface PluginCloneOutcome {
+  // 新建或恢复出的实例 ID
+  instance_id: string
+}
+
+/**
+ * 一个已停用、其设置仍留存可被恢复的分身实例。
+ *
+ * 启用中的分身不在此列：它们的配置正被使用，拿来「恢复」没有意义，摆进清单
+ * 只会让人以为能把一个活着的实例再创建一遍。
+ */
+export interface PluginRestorableInstance {
+  // 分身实例 ID
+  instance_id: string
+  // 该实例相对源插件 ID 的后缀，直接回填创建表单即可触发恢复
+  suffix: string
+  // 停用前登记的展示名称
+  plugin_name?: string | null
+  // 停用前登记的描述
+  plugin_desc?: string | null
+  // 是否留有业务参数
+  has_config: boolean
+}
+
+// 插件侧栏全页导航项（与后端 PluginSidebarNavItem 对齐）
+export interface PluginSidebarNavItem {
+  plugin_id: string
+  nav_key: string
+  title: string
+  icon: string
+  section: 'start' | 'discovery' | 'subscribe' | 'organize' | 'system'
+  permission?: 'subscribe' | 'discovery' | 'search' | 'manage' | 'admin' | null
+  order: number
+}
+
+// 渲染结构
+export interface RenderProps {
+  component: string
+  text?: string
+  html?: string
+  content?: any
+  slots?: any
+  props?: any
+  events?: any
+}
+
+// 仪表板组件
+export interface DashboardItem {
+  // ID
+  id: string
+  // 名称
+  name: string
+  // 插件的仪表板key
+  key: string
+  // 全局配置
+  attrs: { [key: string]: any }
+  // col列数
+  cols: { [key: string]: number }
+  // Grid行数
+  rows?: number
+  // 页面元素
+  elements: RenderProps[]
+  // 渲染方式
+  render_mode?: string
+  // 共享联邦资源的源插件 ID
+  source_plugin_id?: string
+}
+
+// 种子信息
+export interface TorrentInfo {
+  // 站点ID
+  site?: number
+  // 站点名称
+  site_name?: string
+  // 站点Cookie
+  site_cookie?: string
+  // 站点UA
+  site_ua?: string
+  // 站点是否使用代理
+  site_proxy: boolean
+  // 站点优先级
+  site_order: number
+  // 站点下载器
+  site_downloader?: string
+  // 种子名称
+  title?: string
+  // 种子副标题
+  description?: string
+  // 种子页面声明的媒体来源
+  media_source?: MediaDataSource
+  // 种子页面声明的数据源原生 ID
+  media_id?: string
+  // 种子链接
+  enclosure?: string
+  // 详情页面
+  page_url?: string
+  // 种子大小
+  size: number
+  // 做种者
+  seeders: number
+  // 下载者
+  peers: number
+  // 完成者
+  grabs: number
+  // 发布时间
+  pubdate?: string
+  // 已过时间
+  date_elapsed?: string
+  // 上传因子
+  uploadvolumefactor: number
+  // 下载因子
+  downloadvolumefactor: number
+  // HR
+  hit_and_run: boolean
+  // 种子标签
+  labels: string[]
+  // 种子优先级
+  pri_order: number
+  // 促销描述
+  volume_factor: string
+  // 免费时间
+  freedate: string
+  // 剩余免费时间
+  freedate_diff: string
+  // 种子类型
+  category: string
+}
+
+// 字幕信息
+export interface SubtitleInfo {
+  // 站点ID
+  site?: number
+  // 站点名称
+  site_name?: string
+  // 站点Cookie
+  site_cookie?: string
+  // 站点UA
+  site_ua?: string
+  // 站点是否使用代理
+  site_proxy?: boolean
+  // 站点优先级
+  site_order?: number
+  // 字幕标题
+  title?: string
+  // 字幕描述
+  description?: string
+  // 字幕下载链接
+  enclosure?: string
+  // 详情页面
+  page_url?: string
+  // 语言
+  language?: string
+  // 语言图标
+  language_icon?: string
+  // 字幕大小
+  size?: number
+  // 发布时间
+  pubdate?: string
+  // 已过时间
+  date_elapsed?: string
+  // 点击/下载次数
+  grabs?: number
+  // 上传者
+  uploader?: string
+  // 举报页面
+  report_url?: string
+  // 种子ID
+  torrent_id?: string
+  // 字幕ID
+  subtitle_id?: string
+  // 下载文件名
+  file_name?: string
+  // 识别元数据
+  meta_info?: MetaInfo
+  // SxxExx
+  season_episode?: string
+  // 集列表
+  episode_list?: number[]
+}
+
+// 识别元数据
+export interface MetaInfo {
+  // 是否处理的文件
+  isfile: boolean
+  // 原字符串
+  org_string?: string
+  // 原标题（未经识别词转换）
+  title?: string
+  // 副标题
+  subtitle?: string
+  // 类型 电影、电视剧
+  type: string
+  // 识别的中文名
+  cn_name?: string
+  // 识别的英文名
+  en_name?: string
+  // 年份
+  year?: string | number
+  // 音乐艺术家列表
+  artists?: string[]
+  // 音乐艺术家展示文本
+  artist?: string
+  // 音乐专辑
+  album?: string
+  // 音乐专辑艺术家
+  album_artist?: string
+  // 音乐碟号
+  disc_number?: number
+  // 音乐音轨号
+  track_number?: number
+  // 音乐总音轨数
+  total_tracks?: number
+  // 音乐时长（秒）
+  duration?: number
+  // 音乐 ISRC
+  isrc?: string
+  // 总季数
+  total_season: number
+  // 识别的开始季 数字
+  begin_season?: number
+  // 识别的结束季 数字
+  end_season?: number
+  // 总集数
+  total_episode: number
+  // 识别的开始集
+  begin_episode?: number
+  // 识别的结束集
+  end_episode?: number
+  // Partx Cd Dvd Disk Disc
+  part?: string
+  // 识别的资源类型
+  resource_type?: string
+  // 识别的效果
+  resource_effect?: string
+  // 识别的分辨率
+  resource_pix?: string
+  // 识别的制作组/字幕组
+  resource_team?: string
+  // 视频编码
+  video_encode?: string
+  // 音频编码
+  audio_encode?: string
+  // 音频格式
+  audio_format?: string
+  // 是否无损音频
+  audio_lossless?: boolean
+  // 音质等级
+  audio_quality?: 'hires' | 'lossless' | 'lossy'
+  // 音质洗版分数
+  audio_quality_score?: number
+  // 格式化音频参数
+  audio_specs?: string
+  // 音频位深
+  bit_depth?: number
+  // 音频采样率
+  sample_rate?: number
+  // 音频码率
+  bitrate?: number
+  // 名称（自动中英文）
+  name: string
+  // SXX-SXX
+  season: string
+  // SXX-SXX 有季号才返回
+  sea: string
+  // begin_season 的数字，电视剧没有季的返回1
+  season_seq: string
+  // 季的数组
+  season_list: number[]
+  // Exx-Exx
+  episode: string
+  // 集的数组
+  episode_list: number[]
+  // ExxExx
+  episodes: string
+  // xx-xx
+  episode_seqs: string
+  // begin_episode 的数字
+  episode_seq: string
+  // SxxExx
+  season_episode: string
+  // 资源类型字符串，含分辨率
+  resource_term: string
+  // 发布组/字幕组字符串
+  release_group: string
+  // 视频编码
+  video_term: string
+  // 音频编码
+  audio_term: string
+  // 资源类型+特效
+  edition: string
+  // 流媒体平台
+  web_source: string
+  // 应用的自定义识别词
+  apply_words: string[]
+}
+
+// 上下文信息
+export interface Context {
+  // 元信息
+  meta_info: MetaInfo
+  // 媒体信息
+  media_info: MediaInfo
+  // 种子信息
+  torrent_info: TorrentInfo
+  match_status?: 'exact' | 'candidate' | null
+  match_reason?: string | null
+}
+
+// 用户信息
+export interface User {
+  // 用户ID
+  id: number
+  // 用户名称
+  name: string
+  // 用户密码仅用于写入，查询响应不返回该字段
+  password?: string
+  // 用户邮箱
+  email: string
+  // 是否激活
+  is_active: boolean
+  // 是否管理员
+  is_superuser: boolean
+  // 头像
+  avatar: string
+  // 是否开启二次验证
+  is_otp: boolean
+  // 用户权限 json
+  permissions: { [key: string]: any }
+  // 用户个性化设置 json
+  settings: { [key: string]: string | null }
+  // 昵称
+  nickname?: string
+}
+
+// 头像上传响应数据
+export interface AvatarUploadData {
+  filename: string
+}
+
+// 通行密钥
+export interface PassKey {
+  id: number
+  name: string
+  created_at: string
+  last_used_at?: string
+  aaguid?: string
+  transports?: string
+}
+
+// 存储空间
+export interface Storage {
+  // 总空间
+  total_storage: number
+  // 已使用空间
+  used_storage: number
+}
+
+// 媒体统计
+export interface MediaStatistic {
+  // 电影总数
+  movie_count: number
+  // 电视剧总数
+  tv_count: number
+  // 电视剧总集数，未获取时为 null
+  episode_count: number | null
+  // 音乐总数
+  music_count: number
+  // 用户数量，仪表板已改为展示音乐数量，仅保留接口字段兼容
+  user_count?: number
+  // 本月新增电影数量
+  movie_count_month: number
+  // 本月新增电视剧数量
+  tv_count_month: number
+  // 本月新增剧集数量
+  episode_count_month: number
+  // 本月新增音乐数量
+  music_count_month: number
+}
+
+// 后台进程
+export interface Process {
+  // 进程ID
+  pid: number
+  // 进程名称
+  name: string
+  // 进程状态
+  status: string
+  // 进程启动时间
+  create_time: number
+  // 进程运行时间
+  run_time: number
+  // 进程CPU占用率
+  cpu: number
+  // 进程内存占用
+  memory: number
+}
+
+// 仪表板系统摘要
+export interface DashboardSystemInfo {
+  // 主机名称
+  hostname: string
+  // 操作系统名称
+  operating_system: string
+  // MoviePilot 运行时间，单位秒
+  runtime: number
+  // MoviePilot 后端版本
+  version: string
+}
+
+// 下载器信息
+export interface DownloaderInfo {
+  // 下载速度
+  download_speed: number
+  // 上传速度
+  upload_speed: number
+  // 下载量
+  download_size: number
+  // 上传量
+  upload_size: number
+  // 剩余空间
+  free_space: number
+}
+
+// 仪表板系统内存信息
+export interface DashboardMemoryInfo {
+  // 总内存字节数
+  total: number
+  // 已使用内存字节数，不包含缓存
+  used: number
+  // 缓存与缓冲区占用字节数
+  cached: number
+  // 可用内存字节数
+  available: number
+  // 已使用内存占总内存百分比，不包含缓存
+  usage: number
+}
+
+// 定时服务进度信息
+export interface ScheduleProgress {
+  // ID
+  id?: string
+  // 名称
+  name?: string
+  // 多语言名称
+  name_i18n?: string
+  // 提供者
+  provider?: string
+  // 多语言提供者
+  provider_i18n?: string
+  // 是否正在执行
+  enable?: boolean
+  // 当前完成百分比
+  value?: number
+  // 当前进度文本
+  text?: string
+  // 多语言进度文本
+  text_i18n?: string
+  // 执行状态
+  status?: string
+  // 最近一次执行是否成功
+  success?: boolean
+  // 最近一次开始时间
+  started_at?: string
+  // 最近一次结束时间
+  finished_at?: string
+  // 最近一次错误信息
+  error?: string
+  // 多语言错误信息
+  error_i18n?: string
+  // 扩展数据
+  data?: Record<string, unknown>
+}
+
+// 定时服务信息
+export interface ScheduleInfo {
+  // ID
+  id: string
+  // 名称
+  name: string
+  // 多语言名称
+  name_i18n?: string
+  // 提供者
+  provider: string
+  // 多语言提供者
+  provider_i18n?: string
+  // 状态
+  status: string
+  // 多语言状态
+  status_i18n?: string
+  // 下次运行时间
+  next_run?: string
+  // 多语言下次运行时间
+  next_run_i18n?: string
+  // 当前完成百分比
+  progress?: number
+  // 进度文本
+  progress_text?: string
+  // 多语言进度文本
+  progress_text_i18n?: string
+  // 是否正在更新进度
+  progress_enable?: boolean
+  // 进度详情
+  progress_detail?: ScheduleProgress
+}
+
+// 消息通知
+export interface NotificationSwitch {
+  // 消息类型
+  mtype: string
+  // 开关
+  wechat: boolean
+  telegram: boolean
+  slack: boolean
+  synologychat: boolean
+  vocechat: boolean
+  webpush: boolean
+}
+
+// 文件浏览接口
+export interface EndPoints {
+  // 文件列表
+  list: any
+  // 创建目录
+  mkdir: any
+  // 删除文件
+  delete: any
+  // 下载文件
+  download: any
+  // 图片预览
+  image: any
+  // 重命名
+  rename: any
+}
+
+// 文件浏览项目
+export interface FileItem {
+  // 存储
+  storage: string
+  // 类型 dir/file
+  type: string
+  // 文件名
+  name: string
+  // 文件名不含扩展名
+  basename?: string
+  // 文件路径
+  path: string
+  // 文件扩展名
+  extension?: string
+  // 文件大小
+  size?: number
+  // 文件子元素
+  children?: FileItem[]
+  // 文件创建时间
+  modify_time?: number
+  // 文件ID
+  fileid?: string
+  // 上级文件ID
+  parent_fileid?: string
+  // 缩略图
+  thumbnail?: string
+  // pickcode
+  pickcode?: string
+  // drive_id
+  drive_id?: string
+}
+
+// 媒体服务器播放条目
+export interface MediaServerPlayItem {
+  // ID
+  id?: string | number
+  // 媒体服务器项目ID
+  item_id?: string | number
+  // 媒体服务器ID
+  server_id?: string
+  // 标题
+  title: string
+  // 副标题
+  subtitle?: string
+  // 类型
+  type?: string
+  // 海报
+  image?: string
+  // 链接
+  link?: string
+  // 播放百分比
+  percent?: number
+  // 媒体服务器类型
+  server_type?: string
+  // 图片是否需要Cookies
+  use_cookies?: boolean
+}
+
+// 媒体服务器媒体库
+export interface MediaServerLibrary {
+  // 服务器名称
+  server: string
+  // ID
+  id?: string | number
+  // 媒体服务器项目ID
+  item_id?: string | number
+  // 媒体服务器ID
+  server_id?: string
+  // 名称
+  name: string
+  // 路径
+  path?: string
+  // 类型
+  type?: string
+  // 库内媒体数量
+  item_count?: number
+  // 图片
+  image?: string
+  // 图片列表
+  image_list?: string[]
+  // 链接
+  link?: string
+  // 媒体服务器类型
+  server_type?: string
+  // 图片是否需要Cookies
+  use_cookies?: boolean
+}
+
+// 消息通知
+export interface Message {
+  // 消息ID
+  id?: number
+  // 消息渠道
+  channel?: string
+  // 消息来源
+  source?: string
+  // 消息类型
+  mtype?: string
+  // 消息标题
+  title?: string
+  // 消息内容
+  text?: string
+  // 消息链接
+  link?: string
+  // 消息图片
+  image?: string
+  // 消息时间
+  date?: string
+  // 登记时间
+  reg_time?: string
+  // 用户ID
+  userid?: string
+  // 消息方向：0-接收，1-发送
+  action?: number
+  // JSON
+  note?: string | any[] | Record<string, any>
+}
+
+// 系统通知
+export interface SystemNotification extends Message {
+  // 通知类型 user/system/plugin/notification
+  type?: string
+  // 通知时间
+  date?: string
+  // 是否已读
+  read?: boolean
+}
+
+// 下载器配置
+export interface DownloaderConf {
+  // 名称
+  name: string
+  // 类型 qbittorrent/transmission
+  type: string
+  // 是否默认
+  default: boolean
+  // 配置
+  config: { [key: string]: any }
+  // 是否启用
+  enabled: boolean
+  // 路径映射
+  path_mapping?: Array<[storagePath: string, downloadPath: string]>
+}
+
+// 通知配置
+export interface NotificationConf {
+  // 稳定通知渠道身份；显示名称变化时保持不变，用于配置保存和运行态引用
+  id: string
+  // 名称
+  name: string
+  // 类型 telegram/wechat/vocechat/synologychat
+  type: string
+  // 配置
+  config: { [key: string]: any }
+  // 场景开关
+  switchs?: string[]
+  // 是否启用
+  enabled: boolean
+}
+
+// 通知场景开关配置
+export interface NotificationSwitchConf {
+  // 场景名称
+  type: string
+  // 通知范围 all/user/admin
+  action: string
+}
+
+// 存储配置
+export interface StorageConf {
+  // 名称
+  name: string
+  // 类型 local/alipan/u115/rclone
+  type: string
+  // 配置
+  config?: { [key: string]: any }
+}
+
+// 不包含连接配置的存储选择项
+export interface StorageOption {
+  // 名称
+  name: string
+  // 类型 local/alipan/u115/rclone
+  type: string
+}
+
+/** 后端返回的可新增存储类型目录项。 */
+export interface StorageCatalogOption {
+  type: string
+  name: string
+  name_i18n: string
+  icon: string
+  remote: boolean
+}
+
+// 媒体服务器配置
+export interface MediaServerConf {
+  // 名称
+  name: string
+  // 类型 emby/zspace/jellyfin/plex/trimemedia/ugreen/navidrome/mediavault
+  type: string
+  // 配置
+  config: { [key: string]: any }
+  // 是否启用
+  enabled: boolean
+  // 同步媒体体库列表
+  sync_libraries?: string[]
+  // 自动同步间隔（小时），为空时使用旧全局配置
+  sync_interval?: number | null
+}
+
+// 不包含连接配置和凭据的媒体服务器选择项
+export interface MediaServerClient {
+  // 实例名称
+  name: string
+  // 类型 emby/zspace/jellyfin/plex/trimemedia/ugreen/navidrome/mediavault
+  type: string
+}
+
+// 文件整理目录配置
+export interface TransferDirectoryConf {
+  // 名称
+  name: string
+  // 优先级
+  priority: number
+  // 存储
+  storage: string
+  // 下载目录
+  download_path?: string
+  // 适用媒体类型
+  media_type?: string
+  // 适用媒体类别
+  media_category?: string
+  // 适用媒体类别稳定 ID；media_category 仅保存服务端规范化路径快照
+  media_category_id?: string | null
+  // 下载类型子目录
+  download_type_folder?: boolean
+  // 下载类别子目录
+  download_category_folder?: boolean
+  // 监控方式 downloader/monitor，None为不监控
+  monitor_type?: string
+  // 监控模式 fast/compatibility
+  monitor_mode?: string
+  // 整理方式 move/copy/link/softlink
+  transfer_type: string
+  // 文件覆盖模式 always/size/never/latest
+  overwrite_mode?: string
+  // 整理到媒体库目录
+  library_path?: string
+  // 媒体库目录存储
+  library_storage?: string
+  // 智能重命名
+  renaming?: boolean
+  // 刮削
+  scraping?: boolean
+  // 媒体库类型子目录
+  library_type_folder?: boolean
+  // 媒体库类别子目录
+  library_category_folder?: boolean
+  // 是否发送通知
+  notify?: boolean
+}
+
+// 可直接用于下载保存路径选择的目录摘要
+export interface DownloadDirectory {
+  // 目录名称
+  name?: string
+  // 存储类型
+  storage?: string
+  // 原始下载目录
+  download_path?: string
+  // 可直接提交给下载接口的保存路径
+  save_path?: string
+  // 优先级
+  priority?: number
+  // 适用媒体类型
+  media_type?: string
+  // 适用媒体分类
+  media_category?: string
+  // 适用媒体分类稳定 ID
+  media_category_id?: string | null
+}
+
+// 自定义规则项
+export interface CustomRule {
+  // 规则ID
+  id: string
+  // 名称
+  name: string
+  // 包含
+  include?: string
+  // 排除
+  exclude?: string
+  // 大小范围
+  size_range?: string
+  // 最少做种人数
+  seeders?: string
+  // 发布时间
+  publish_time?: string
+}
+
+// 过滤规则组
+export interface FilterRuleGroup {
+  // 名称
+  name: string
+  // 规则串
+  rule_string?: string
+  // 适用媒体类型 None-全部 电影/电视剧/音乐
+  media_type?: string
+  // # 适用媒体类别 None-全部 对应二级分类
+  category?: string
+}
+
+// 规则测试结果
+export interface RuleTestData {
+  // 原始标题
+  title?: string
+  // 原始副标题
+  subtitle?: string
+  // 规则组名称
+  rulegroup_name?: string
+  // 规则组详情
+  rulegroup?: FilterRuleGroup | null
+  // 识别元数据
+  meta_info?: MetaInfo | null
+  // 媒体信息
+  media_info?: MediaInfo | null
+  // 种子信息
+  torrent_info?: TorrentInfo | null
+  // 优先级
+  priority?: number | null
+  // 是否命中过滤规则
+  matched?: boolean
+}
+
+// 订阅下载文件详情
+export interface SubscribeDownloadFileInfo {
+  // 种子名称
+  torrent_title?: string
+  // 站点名称
+  site_name?: string
+  // 下载器
+  downloader?: string
+  // hash
+  hash?: string
+  // 文件路径
+  file_path?: string
+}
+
+// 订阅媒体库文件详情
+export interface SubscribeLibraryFileInfo {
+  // 存储
+  storage?: string
+  // 文件路径
+  file_path?: string
+  // 媒体服务器名称
+  server?: string
+  // 媒体服务器类型：emby、jellyfin、plex 等
+  server_type?: string
+  // 媒体服务器条目 ID
+  itemid?: string
+}
+
+// 订阅集详情
+export interface SubscribeEpisodeInfo {
+  // 标题
+  title?: string
+  // 描述
+  description?: string
+  // 背景图
+  backdrop?: string
+  // 下载文件信息
+  download?: SubscribeDownloadFileInfo[]
+  // 媒体库文件信息
+  library?: SubscribeLibraryFileInfo[]
+}
+
+// 订阅详情
+export interface SubscrbieInfo {
+  // 订阅信息
+  subscribe: Subscribe
+  // 集信息 {集号: {download: 文件路径，library: 文件路径, backdrop: url, title: 标题, description: 描述}}
+  episodes: Record<number, SubscribeEpisodeInfo>
+}
+
+// 整理表单
+export interface TransferForm {
+  // 文件项
+  fileitem: FileItem
+  // 历史ID
+  logid: number
+  // 目标存储
+  target_storage: string | null
+  // 目标路径
+  target_path: string | null
+  // 媒体数据源
+  media_source?: MediaDataSource | null
+  // 数据源原生ID
+  media_id?: string | null
+  // 音乐实体类型
+  music_type?: Exclude<MusicEntityType, 'artist'> | 'artist_collection' | null
+  // MusicBrainz 发行地区优先级；未传时继承系统设置
+  music_release_regions?: string[] | null
+  // MusicBrainz 文字字形优先级；未传时继承系统设置
+  music_release_scripts?: string[] | null
+  // 季号
+  season?: number
+  // 类型
+  type_name?: string
+  // 整理方式
+  transfer_type: string | null
+  // 自定义格式
+  episode_format?: string
+  // 指定集数
+  episode_detail?: string
+  // 指定PART
+  episode_part?: string
+  // 集数偏移
+  episode_offset?: string
+  // 最小文件大小
+  min_filesize: number
+  // 刮削
+  scrape: boolean | null
+  // 复用历史识别信息
+  from_history: boolean
+  // 媒体库类型子目录
+  library_type_folder?: boolean | null
+  // 媒体库类别子目录
+  library_category_folder?: boolean | null
+  // 剧集组编号
+  episode_group?: string | null
+  // 预览模式
+  preview?: boolean
+  // 清理已有成功记录后重新整理
+  reorganize: boolean
+}
+
+// 手动整理请求
+export interface ManualTransferPayload extends Omit<TransferForm, 'fileitem' | 'logid' | 'music_type'> {
+  // 后端仅接收实际参与识别的单曲或专辑实体；艺术家合集由前端拆分后转换。
+  music_type?: Exclude<MusicEntityType, 'artist'> | null
+  // 预览和执行均跳过已有成功整理记录，保留其目标文件与历史。
+  skip_success?: boolean
+  // 文件项
+  fileitem?: FileItem
+  // 多选文件批量请求
+  fileitems?: FileItem[]
+  // 单条整理历史请求
+  logid?: number
+  // 多选整理历史批量请求
+  logids?: number[]
+}
+
+// 手动整理目的路径匹配请求
+export interface ManualTransferTargetPathRequest {
+  // 单个源文件项
+  fileitem?: FileItem
+  // 多个源文件项
+  fileitems?: FileItem[]
+  // 整理历史记录
+  logids?: number[]
+  // 限定目标存储
+  target_storage?: string | null
+}
+
+// 手动整理目的路径匹配结果
+export interface ManualTransferTargetPathData {
+  // 目标存储
+  target_storage?: string | null
+  // 目标路径
+  target_path?: string | null
+  // 整理方式
+  transfer_type?: string | null
+  // 刮削
+  scrape?: boolean | null
+  // 媒体库类型子目录
+  library_type_folder?: boolean | null
+  // 媒体库类别子目录
+  library_category_folder?: boolean | null
+}
+
+// 手动整理命中的成功历史摘要
+export interface ManualTransferHistoryInfo {
+  // 是否应执行重新整理
+  reorganize: boolean
+  // 命中的成功历史数量
+  history_count: number
+}
+
+// 手动整理预览统计
+export interface ManualTransferPreviewSummary {
+  // 总数
+  total: number
+  // 成功数
+  success: number
+  // 失败数
+  failed: number
+}
+
+// 手动整理预览项
+export interface ManualTransferPreviewItem {
+  // 原始路径
+  source?: string
+  // 目标路径
+  target?: string
+  // 目标目录
+  target_dir?: string
+  // 是否成功
+  success?: boolean
+  // 提示信息
+  message?: string
+  // 失败阶段和建议恢复动作
+  failure_stage?: string
+  recovery_action?: string
+  // 是否因覆盖策略跳过
+  overwrite_skipped?: boolean
+  // 媒体类型
+  type?: string
+  // 媒体标题
+  title?: string
+  // 季
+  season?: number | string
+  // 开始集
+  episode?: number | string
+  // 结束集
+  episode_end?: number | string
+  // Part
+  part?: string
+  // 原始识别字符串
+  org_string?: string
+  // 应用的自定义识别词
+  apply_words?: string[]
+  // 制作组/字幕组
+  resource_team?: string
+  // 自定义占位符
+  customization?: string
+  // 艺术家合集模式下的一级目录分组，仅用于前端聚合展示。
+  collection_group?: string
+  // 艺术家合集中的实际整理实体。
+  collection_entity?: 'album' | 'recording'
+}
+
+// 手动整理预览数据
+export interface ManualTransferPreviewData {
+  // 统计信息
+  summary: ManualTransferPreviewSummary
+  // 预览结果
+  items: ManualTransferPreviewItem[]
+  // 额外消息
+  message?: string
+}
+
+// 实际提交的单项结果；后台接收与重试不表示媒体已经入库。
+export interface ManualTransferSubmissionItem {
+  source?: string
+  target?: string
+  target_dir?: string
+  success?: boolean
+  state?: 'accepted' | 'completed' | 'failed' | 'retry_wait' | 'manual_review' | 'skipped'
+  message?: string
+  failure_stage?: string
+  recovery_action?: string
+  overwrite_skipped?: boolean
+}
+
+// 实际提交响应与预览分开，业务失败响应也可携带部分成功结果。
+export interface ManualTransferSubmissionData {
+  items: ManualTransferSubmissionItem[]
+  message?: string
+}
+
+// 整理队列
+export interface TransferQueue {
+  // 媒体信息
+  media: MediaInfo
+  // 季
+  season?: number
+  // 任务列表
+  tasks: {
+    // 文件项
+    fileitem: FileItem
+    // 元数据
+    meta: MetaInfo
+    // 状态
+    state: string
+  }[]
+}
+
+// 人工复核允许管理员判定 durable 整理步骤的外部执行结果。
+export type TransferManualReviewDecision = 'not_applied' | 'applied'
+
+// 人工复核任务中的步骤证据与冻结意图。
+export interface TransferManualReviewStep {
+  // 稳定的整理操作标识
+  operation_id: string
+  // 整理步骤类型
+  kind: string
+  // 执行前冻结的步骤参数
+  intent: Record<string, unknown>
+  // 执行异常后留下的外部事实证据
+  evidence?: Record<string, unknown> | null
+  // 最后一次执行错误
+  error?: string | null
+}
+
+// 队列中需要管理员处理的单条人工复核任务。
+export interface TransferManualReviewTask {
+  // durable 整理任务标识
+  task_id: string
+  // 源文件身份
+  source: {
+    storage: string
+    path: string
+  }
+  // 当前复核状态
+  state: 'manual_review' | 'retry_wait'
+  // 待判定步骤
+  step: TransferManualReviewStep
+  // 人工复核版本，避免旧详情覆盖新状态
+  review_revision: number
+}
+
+// 人工复核列表响应。
+export interface TransferManualReviewPage {
+  // 当前页任务
+  items: TransferManualReviewTask[]
+  // 服务端总数
+  total: number
+  // 当前页码
+  page: number
+  // 每页大小
+  page_size: number
+}
+
+// 探索的数据源
+export interface DiscoverSource {
+  // 数据源名称
+  name: string
+  // 内置或插件扩展媒体来源
+  media_source?: MediaDataSource
+  // 媒体ID的前缀，不含:
+  mediaid_prefix: string
+  // 媒体数据源API地址
+  api_path: string
+  // 过滤参数
+  filter_params: { [key: string]: any }
+  // 过滤参数UI配置
+  filter_ui: RenderProps[]
+  // UI依赖关系字典
+  depends?: { [key: string]: string[] }
+}
+
+// 推荐的数据源
+export interface RecommendSource {
+  // 数据源名称
+  name: string
+  // 媒体数据源API地址
+  api_path: string
+  // 类型
+  type: string
+}
+
+// 站点资源分类
+export interface SiteCategory {
+  id: number
+  cat: string
+  desc: string
+}
+
+// 工作流
+export interface Workflow {
+  // 工作流ID
+  id?: string
+  // 工作流名称
+  name?: string
+  // 工作流描述
+  description?: string
+  // 定时器
+  timer?: string
+  // 触发类型：timer-定时触发 event-事件触发 manual-手动触发
+  trigger_type?: string
+  // 事件类型（当trigger_type为event时使用）
+  event_type?: string
+  // 状态
+  state?: string
+  // 当前执行动作
+  current_action?: string
+  // 任务执行结果
+  result?: string
+  // 已执行次数
+  run_count?: number
+  // 动作列表
+  actions?: any[]
+  // 动作流
+  flows?: any[]
+  // 工作流执行配置
+  execution_config?: { [key: string]: any }
+  // 工作流结构化执行状态
+  execution_state?: { [key: string]: any }
+  // 创建时间
+  add_time?: string
+  // 最后执行时间
+  last_time?: string
+}
+
+// 种子缓存项
+export interface TorrentCacheItem {
+  // 种子hash（用于操作标识）
+  hash: string
+  // 站点域名
+  domain: string
+  // 种子标题
+  title: string
+  // 种子描述
+  description?: string
+  // 种子大小
+  size: number
+  // 发布时间
+  pubdate?: string
+  // 站点名称
+  site_name?: string
+  // 识别的媒体名称
+  media_name?: string
+  // 识别的媒体年份
+  media_year?: string
+  // 识别的媒体类型
+  media_type?: string
+  // 识别结果的数据源
+  media_source?: MediaDataSource
+  // 数据源原生媒体 ID
+  media_id?: string
+  // 音乐实体类型
+  music_type?: Exclude<MusicEntityType, 'artist'>
+  // 季集信息
+  season_episode?: string
+  // 资源信息
+  resource_term?: string
+  // 种子链接
+  enclosure?: string
+  // 详情页面
+  page_url?: string
+  // 海报图片
+  poster_path?: string
+  // 背景图片
+  backdrop_path?: string
+}
+
+// 种子缓存数据
+export interface TorrentCacheData {
+  // 缓存数量
+  count: number
+  // 站点数量
+  sites: number
+  // 缓存数据
+  data: TorrentCacheItem[]
+}
+
+// 媒体识别缓存项
+export interface RecognitionCacheItem {
+  // 缓存键
+  key: string
+  // TMDB ID，0 表示未识别
+  tmdb_id?: number
+  // 识别缓存对应的字符串 ID
+  recognition_id?: string
+  // 识别后的标题
+  title: string
+  // 识别后的年份
+  year: string
+  // 媒体类型
+  media_type: string
+  // TMDB 海报相对路径
+  poster_path?: string
+  // TMDB 背景图相对路径
+  backdrop_path?: string
+}
+
+// 媒体识别缓存数据
+export interface RecognitionCacheData {
+  // 缓存总数
+  count: number
+  // 已识别数量
+  recognized: number
+  // 未识别数量
+  unrecognized: number
+  // 共享识别成功命中数量
+  shared_recognized: number
+  // 是否开启共享识别
+  shared_recognize_enabled: boolean
+  // 缓存数据
+  data: RecognitionCacheItem[]
+}
+
+// 音乐识别缓存项
+export interface MusicRecognitionCacheItem {
+  // 缓存键
+  key: string
+  // MusicBrainz ID，空字符串表示未识别
+  media_id?: string
+  // 识别后的曲名/专辑名
+  title: string
+  // 艺术家列表
+  artists?: string[]
+  // 所属专辑
+  album?: string
+  // 发行年份
+  year?: string | number
+  // 音乐实体类型：recording/album/artist
+  music_type?: string
+  // 封面图片地址
+  cover_url?: string
+}
+
+// 音乐识别缓存数据
+export interface MusicRecognitionCacheData {
+  // 缓存总数
+  count: number
+  // 已识别数量
+  recognized: number
+  // 未识别数量
+  unrecognized: number
+  // 缓存数据
+  data: MusicRecognitionCacheItem[]
+}
+
+// 订阅分享统计
+export interface SubscribeShareStatistics {
+  // 分享人
+  share_user?: string
+  // 分享数量
+  share_count?: number
+  // 总复用人次
+  total_reuse_count?: number
+}
+
+/** 后端 API 的固定 envelope；失败及无返回值操作允许 data 为 null。 */
+export type SystemUpdateState = 'idle' | 'available' | 'downloading' | 'ready' | 'installing' | 'failed'
+
+/** 后台更新支持的两类升级目标。 */
+export type SystemUpdateType = 'application' | 'resources'
+
+/** 单类升级的后台状态。 */
+export interface SystemUpdateItemStatus {
+  type: SystemUpdateType
+  state: SystemUpdateState
+  current_version?: string | null
+  version?: string | null
+  frontend_version?: string | null
+  current_auth_version?: string | null
+  auth_version?: string | null
+  current_indexer_version?: string | null
+  indexer_version?: string | null
+  release_name?: string | null
+  release_notes?: string | null
+  published_at?: string | null
+  checked_at?: string | null
+  downloaded_bytes: number
+  total_bytes: number
+  progress: number
+  error?: string | null
+  can_update: boolean
+  can_install: boolean
+}
+
+/** 后端主程序与站点资源后台更新状态机快照。 */
+export interface SystemUpdateStatus {
+  /** 当前自动检查开关；由后端实时返回，避免旧缓存继续触发提醒。 */
+  auto_update?: boolean
+  /** 站点资源单独控制自动检查和提醒。 */
+  auto_update_resource?: boolean
+  state: SystemUpdateState
+  current_version: string
+  version?: string | null
+  frontend_version?: string | null
+  release_name?: string | null
+  release_notes?: string | null
+  published_at?: string | null
+  checked_at?: string | null
+  downloaded_bytes: number
+  total_bytes: number
+  progress: number
+  error?: string | null
+  can_update: boolean
+  can_install: boolean
+  updates?: SystemUpdateItemStatus[]
+}
+
+export interface ApiResponse<T = unknown> {
+  success: boolean
+  message: string
+  data: T | null
+}

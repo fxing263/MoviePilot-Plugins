@@ -1,0 +1,7 @@
+{
+  "components/dialog/ReorganizeDialog.vue": {
+    "upstream_sha256": "1462c129d151a93227d71f7101a1dfb176599ef5d8ea108b75d058ded03f827a",
+    "upstream_file": "artifacts/rapid115-frontend/src/components/dialog/ReorganizeDialog.vue",
+    "changes": "插件媒体整理记录页预览路径编辑、校验及插件专用提交；保留原版完整整理交互。"
+  }
+}

@@ -1,0 +1,3188 @@
+<script lang="ts" setup>
+import CryptoJS from 'crypto-js'
+import { useToast } from 'vue-toastification'
+import { numberValidator } from '@/@validators'
+import api from '@/api'
+import { ApiRequestError, getApiBusinessErrorMessage, isApiBusinessFailure } from '@/api/client'
+import { transferTypeOptions } from '@/api/constants'
+import { listStorageOptions, listTransferDirectories } from '@/api/storage'
+import {
+  FileItem,
+  ManualTransferHistoryInfo,
+  ManualTransferPayload,
+  ManualTransferPreviewData,
+  ManualTransferPreviewItem,
+  ManualTransferSubmissionData,
+  ManualTransferSubmissionItem,
+  ManualTransferTargetPathData,
+  ManualTransferTargetPathRequest,
+  MediaDataSource,
+  MediaInfo,
+  StorageOption,
+  TransferDirectoryConf,
+  TransferForm,
+} from '@/api/types'
+import { useBackground } from '@/composables/useBackground'
+import { openSharedDialog } from '@/composables/useSharedDialog'
+import MediaIdSelector from '../misc/MediaIdSelector.vue'
+import ProgressDialog from './ProgressDialog.vue'
+import { useI18n } from 'vue-i18n'
+import { useDisplay } from 'vuetify'
+import { useGlobalSettingsStore } from '@/stores'
+import { isMusicMediaSource, isValidMediaSourceId } from '@/utils/mediaId'
+import { useMediaSources } from '@/composables/useMediaSources'
+import { validateTargetEdits, getTargetOverrides } from '@/utils/targetEdits'
+
+// 国际化
+const { t, te } = useI18n()
+const { useProgressSSE } = useBackground()
+
+// 显示器宽度
+const display = useDisplay()
+
+// 输入参数
+const props = defineProps({
+  logids: Array<number>,
+  items: Array<FileItem>,
+  target_storage: String,
+  target_path: String,
+})
+
+// 全局设置
+const globalSettingsStore = useGlobalSettingsStore()
+const globalSettings = globalSettingsStore.globalSettings
+
+const { mediaSourceItems: getMediaSourceItems } = useMediaSources()
+const availableMediaSourceItems = getMediaSourceItems()
+const mediaSourceItems = computed<{ title: string; value: MediaDataSource | null }[]>(() => [
+  { title: t('dialog.reorganize.auto'), value: null },
+  ...availableMediaSourceItems.value,
+])
+
+const musicReleaseRegionItems = computed(() => [
+  { title: t('dialog.reorganize.musicRegionChina'), value: 'CN' },
+  { title: t('dialog.reorganize.musicRegionTaiwan'), value: 'TW' },
+  { title: t('dialog.reorganize.musicRegionHongKong'), value: 'HK' },
+  { title: t('dialog.reorganize.musicRegionWorldwide'), value: 'XW' },
+  { title: t('dialog.reorganize.musicRegionJapan'), value: 'JP' },
+  { title: t('dialog.reorganize.musicRegionUnitedStates'), value: 'US' },
+  { title: t('dialog.reorganize.musicRegionUnitedKingdom'), value: 'GB' },
+  { title: t('dialog.reorganize.musicRegionSouthKorea'), value: 'KR' },
+])
+
+const musicReleaseScriptItems = computed(() => [
+  { title: t('dialog.reorganize.musicScriptSimplified'), value: 'Hans' },
+  { title: t('dialog.reorganize.musicScriptTraditional'), value: 'Hant' },
+  { title: t('dialog.reorganize.musicScriptLatin'), value: 'Latn' },
+  { title: t('dialog.reorganize.musicScriptJapanese'), value: 'Jpan' },
+  { title: t('dialog.reorganize.musicScriptKorean'), value: 'Kore' },
+])
+
+/** 将后台音乐偏好解析为最多三个选项，空配置使用默认顺序。 */
+function parsePreferenceSetting(value: unknown, fallback: string[]) {
+  const parsed = String(value ?? '')
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean)
+  return (parsed.length ? parsed : fallback).slice(0, 3)
+}
+
+const customMusicReleasePreference = ref(false)
+
+/** 将后台地区与文字偏好带入本次手动整理。 */
+function applyDefaultMusicReleasePreference() {
+  transferForm.music_release_regions = parsePreferenceSetting(globalSettings.MUSIC_RELEASE_REGION_PRIORITY, [
+    'CN',
+    'TW',
+    'HK',
+  ])
+  transferForm.music_release_scripts = parsePreferenceSetting(globalSettings.MUSIC_RELEASE_SCRIPT_PRIORITY, [
+    'Hans',
+    'Hant',
+    'Latn',
+  ])
+}
+
+/** 获取后台设置中的默认识别数据源，未知值兼容回退到 TheMovieDb。 */
+function getDefaultMediaSource(): MediaDataSource {
+  const configuredSource = globalSettings.RECOGNIZE_SOURCE as MediaDataSource
+  return mediaSourceItems.value.some(item => item.value === configuredSource) ? configuredSource : 'themoviedb'
+}
+
+// 定义事件
+const emit = defineEmits(['done', 'close'])
+
+// 生成1到100季的下拉框选项
+const seasonItems = ref(
+  Array.from({ length: 101 }, (_, i) => i).map(item => ({
+    title: `${t('dialog.subscribeEdit.seasonFormat', { number: item })}`,
+    value: item,
+  })),
+)
+
+// 提示框
+const $toast = useToast()
+
+// TMDB选择对话框
+const mediaSelectorDialog = ref(false)
+
+// 进度是否激活
+const progressActive = ref(false)
+
+// 整理进度条
+const progressDialog = ref(false)
+
+// 整理进度文本
+const progressText = ref(t('dialog.reorganize.processing'))
+
+// 整理进度
+const progressValue = ref(0)
+
+// 整理请求执行期间保持单一提交，避免同一批源文件被重复处理。
+const transferSubmitting = ref(false)
+
+// 进度SSE连接
+const progressSSE = ref<any>(null)
+
+// 预览加载状态
+const previewLoading = ref(false)
+
+// 预览面板显隐
+const previewVisible = ref(false)
+// 实际提交结果独立于预览，保留部分成功和后台接收状态供逐项核对。
+const submissionResults = ref<ManualTransferSubmissionItem[]>([])
+const submissionResultsElement = ref<HTMLElement>()
+// 需要跟进后台任务或人工复核时再加载队列弹窗。
+const SubmissionQueueDialog = defineAsyncComponent(() => import('./TransferQueueDialog.vue'))
+const hasAcceptedSubmission = computed(() =>
+  submissionResults.value.some(item =>
+    ['accepted', 'completed', 'retry_wait', 'manual_review'].includes(getSubmissionState(item)),
+  ),
+)
+
+// 从提交结果直接进入后台队列，保留当前批次明细供返回后核对。
+function openSubmissionQueue() {
+  openSharedDialog(SubmissionQueueDialog, {}, {}, { closeOn: ['close'] })
+}
+
+// 旧响应未提供状态时，只把成功请求展示为已接收，避免误报完成。
+function getSubmissionState(item: ManualTransferSubmissionItem) {
+  return item.state || (item.overwrite_skipped ? 'skipped' : item.success ? 'accepted' : 'failed')
+}
+
+// 结果颜色区分已完成、后台处理、覆盖跳过和实际失败。
+function getSubmissionColor(item: ManualTransferSubmissionItem) {
+  const state = getSubmissionState(item)
+  if (state === 'completed') return 'success'
+  if (state === 'accepted' || state === 'retry_wait') return 'info'
+  return state === 'skipped' || state === 'manual_review' ? 'warning' : 'error'
+}
+
+// 新后端阶段可先以原文展示，避免缺少翻译时泄露翻译键。
+function getSubmissionStage(stage: string) {
+  const key = `transferHistory.failureStages.${stage}`
+  return te(key) ? t(key) : stage
+}
+
+// 兼容旧后端的空 data，新后端则保留所有逐项结果。
+function collectSubmissionResults(data?: ManualTransferSubmissionData | null) {
+  if (Array.isArray(data?.items)) submissionResults.value.push(...data.items)
+}
+
+// 业务失败也可能包含已成功提交的项，不能仅用总错误覆盖整个批次。
+function collectSubmissionFailure(error: unknown) {
+  if (!(error instanceof ApiRequestError)) return
+  const payload = error.payload as { data?: ManualTransferSubmissionData } | undefined
+  collectSubmissionResults(payload?.data)
+}
+
+// 是否已加载预览
+const previewLoaded = ref(false)
+
+// 预览数据
+const previewData = ref<ManualTransferPreviewData>()
+// 仅插件副本保留本次预览编辑；原版宿主弹窗不会加载此文件。
+const targetEdits = ref<Record<string, string>>({})
+let previewRevision = 0
+const targetEditErrors = computed(() => validateTargetEdits(previewData.value?.items ?? [], targetEdits.value))
+const hasTargetEditErrors = computed(() => Object.keys(targetEditErrors.value).length > 0)
+
+function canEditTarget(item: ManualTransferPreviewItem) {
+  return Boolean(props.logids?.length && item.source && item.target && item.success !== false && !item.overwrite_skipped)
+}
+
+function editedTarget(item: ManualTransferPreviewItem) {
+  return targetEdits.value[item.source ?? ''] ?? item.target ?? ''
+}
+
+function updateTarget(item: ManualTransferPreviewItem, value: string) {
+  if (!item.source) return
+  if (value === item.target) delete targetEdits.value[item.source]
+  else targetEdits.value[item.source] = value
+}
+
+function restoreTarget(item: ManualTransferPreviewItem) {
+  if (item.source) delete targetEdits.value[item.source]
+}
+
+interface ArtistCollectionEntry {
+  item: FileItem
+  group: string
+  musicType: 'album' | 'recording'
+}
+
+// 艺术家合集只在前端负责拆分，后端仍接收稳定的 album / recording 实体。
+const artistCollectionEntries = ref<ArtistCollectionEntry[]>()
+
+// 手动整理历史查询状态
+const manualHistoryLoading = ref(false)
+const manualHistoryCount = ref(0)
+// 仅对本次手动整理生效，默认保留已有的重新整理行为。
+const skipSuccessfulRecords = ref(false)
+
+// 自动目的路径匹配状态
+const targetPathMatchLoading = ref(false)
+const targetPathMatch = ref<ManualTransferTargetPathData>()
+const targetPathMatchFailed = ref(false)
+let targetPathMatchRequestId = 0
+
+interface EpisodeFormatRecommendData {
+  rule_name?: string
+  rule_index?: number
+  pattern?: string
+  episode_format?: string
+  sample_file?: string
+  min_file_size_mb?: number
+  message?: string
+}
+
+const episodeFormatRecommendState = reactive<{
+  loading: boolean
+  ruleName?: string
+  rulePattern?: string
+  generatedFormat?: string
+  sampleFile?: string
+  lastMessage?: string
+}>({
+  loading: false,
+  ruleName: undefined,
+  rulePattern: undefined,
+  generatedFormat: undefined,
+  sampleFile: undefined,
+  lastMessage: undefined,
+})
+
+const episodeFormatRuleConfigured = ref<boolean | undefined>(undefined)
+
+interface TargetDirectoryOption {
+  title: string
+  value: string
+}
+
+const AUTO_TARGET_PATH_VALUE = '__moviepilot_auto_target_path__'
+
+// 媒体类型映射到手动整理接口接受的类型名。
+function resolveTransferMediaType(type?: string) {
+  const normalizedType = type?.trim().toLowerCase()
+  if (!normalizedType) return undefined
+
+  const movieTypes = ['电影', 'movie']
+  if (movieTypes.includes(normalizedType)) return '电影'
+
+  const tvTypes = ['电视剧', 'tv', 'series']
+  if (tvTypes.includes(normalizedType)) return '电视剧'
+
+  const musicTypes = ['音乐', 'music']
+  if (musicTypes.includes(normalizedType)) return '音乐'
+
+  return undefined
+}
+
+// 生成文件项稳定键，用于去重和状态同步。
+function getFileItemKey(item?: FileItem) {
+  return [item?.storage ?? '', item?.type ?? '', item?.path ?? ''].join('|')
+}
+
+// 按存储、类型和路径去重文件项。
+function dedupeFileItems(fileItems?: FileItem[]) {
+  if (!fileItems?.length) return []
+
+  const uniqueItems = new Map<string, FileItem>()
+  fileItems.forEach(item => {
+    uniqueItems.set(getFileItemKey(item), item)
+  })
+
+  return Array.from(uniqueItems.values())
+}
+
+// 生成预览项稳定键，避免合并多次预览结果时重复展示。
+function getPreviewItemKey(item: ManualTransferPreviewItem) {
+  return [item.source ?? '', item.target ?? '', item.success === false ? 'failed' : 'success'].join('|')
+}
+
+// 将预览失败项拼成阶段、原因和下一步动作，避免用户只能看到一条泛化错误。
+function getPreviewFailureHint(item: ManualTransferPreviewItem) {
+  const lines: string[] = []
+  if (item.failure_stage) {
+    const stageKey = `transferHistory.failureStages.${item.failure_stage}`
+    const stage = te(stageKey) ? t(stageKey) : item.failure_stage
+    lines.push(t('transferHistory.failureStage', { stage }))
+  }
+  if (item.message) lines.push(item.message)
+  if (item.recovery_action) {
+    lines.push(t('transferHistory.recoveryAction', { action: item.recovery_action }))
+  }
+  if (item.overwrite_skipped) lines.push(t('dialog.reorganize.overwriteSkippedHint'))
+  return lines.join('\n')
+}
+
+const normalizedItems = computed(() => dedupeFileItems(props.items))
+
+// 整理目录代表一个集合实体；音频文件仍按单曲处理，避免目录入口误入 Recording 搜索。
+const defaultMusicEntity = computed<'album' | 'recording'>(() =>
+  normalizedItems.value.length > 0 && normalizedItems.value.every(item => item.type === 'dir') ? 'album' : 'recording',
+)
+
+const isArtistCollectionMode = computed(
+  () => transferForm.type_name === '音乐' && transferForm.music_type === 'artist_collection',
+)
+
+const audioExtensions = new Set([
+  'aac',
+  'aiff',
+  'alac',
+  'ape',
+  'dff',
+  'dsf',
+  'flac',
+  'm4a',
+  'mp3',
+  'ogg',
+  'opus',
+  'wav',
+  'wma',
+])
+
+function isAudioFile(item: FileItem) {
+  if (item.type !== 'file') return false
+  const extension = (item.extension || item.name?.split('.').pop() || '').toLowerCase().replace(/^\./, '')
+  return audioExtensions.has(extension)
+}
+
+function isSinglesDirectory(item: FileItem) {
+  const name = (item.name || getFileName(item.path)).trim().toLowerCase()
+  return /^(单曲|單曲|singles?|single[\s_-]*tracks?)$/.test(name)
+}
+
+async function listDirectoryItems(item: FileItem) {
+  return await api.post<FileItem[]>('storage/list?sort=name', item, { feedback: 'silent' })
+}
+
+async function listSingleFiles(directory: FileItem, depth = 0): Promise<FileItem[]> {
+  if (depth > 4) return []
+  const children = await listDirectoryItems(directory)
+  const directFiles = children.filter(isAudioFile)
+  const nestedFiles = await Promise.all(
+    children.filter(item => item.type === 'dir').map(item => listSingleFiles(item, depth + 1)),
+  )
+  return [...directFiles, ...nestedFiles.flat()]
+}
+
+/** 将艺术家合集根目录拆为专辑目录和独立单曲，避免整棵目录被逐文件识别。 */
+async function loadArtistCollectionEntries() {
+  if (artistCollectionEntries.value) return artistCollectionEntries.value
+  const root = normalizedItems.value.length === 1 ? normalizedItems.value[0] : undefined
+  if (!root || root.type !== 'dir') throw new Error(t('dialog.reorganize.artistCollectionRequiresDirectory'))
+
+  const children = await listDirectoryItems(root)
+  const entries: ArtistCollectionEntry[] = []
+  for (const child of children) {
+    if (child.type === 'dir' && isSinglesDirectory(child)) {
+      const singles = await listSingleFiles(child)
+      entries.push(
+        ...singles.map(item => ({
+          item,
+          group: child.name || t('dialog.reorganize.artistCollectionSingles'),
+          musicType: 'recording' as const,
+        })),
+      )
+    } else if (child.type === 'dir') {
+      entries.push({ item: child, group: child.name || getFileName(child.path), musicType: 'album' })
+    } else if (isAudioFile(child)) {
+      entries.push({ item: child, group: t('dialog.reorganize.artistCollectionSingles'), musicType: 'recording' })
+    }
+  }
+  if (!entries.length) throw new Error(t('dialog.reorganize.artistCollectionEmpty'))
+  artistCollectionEntries.value = entries
+  return entries
+}
+
+// 使用当前目录或文件名预填媒体搜索，保留艺术家和年份线索以区分同名专辑。
+const mediaSearchHint = computed(() => {
+  if (normalizedItems.value.length !== 1) return ''
+  const path = normalizedItems.value[0]?.path || ''
+  const name = path.split(/[\\/]/).filter(Boolean).at(-1) || ''
+  return normalizedItems.value[0]?.type === 'dir' ? name : name.replace(/\.[^.]+$/, '')
+})
+
+// 分页
+const previewPage = ref(1)
+const previewPageSize = ref(20)
+
+// 所有存储
+const storages = ref<StorageOption[]>([])
+
+// 所有剧集组
+const episodeGroups = ref<{ [key: string]: any }[]>([])
+
+// 剧集组加载状态
+const episodeGroupLoading = ref(false)
+
+// 剧集组查询防抖句柄
+let episodeGroupQueryTimer: ReturnType<typeof setTimeout> | undefined
+
+// 查询存储
+async function loadStorages() {
+  try {
+    storages.value = await listStorageOptions()
+  } catch (error) {
+    console.log(error)
+  }
+}
+
+// 存储字典
+const storageOptions = computed(() => {
+  return [
+    {
+      title: t('dialog.reorganize.auto'),
+      value: null,
+    },
+    ...storages.value.map(item => ({
+      title: item.name,
+      value: item.type,
+    })),
+  ]
+})
+
+// 整理方式选项，包含可提交 null 的自动项。
+const manualTransferTypeOptions = computed(() => {
+  return [
+    {
+      title: t('dialog.reorganize.auto'),
+      value: null,
+    },
+    ...transferTypeOptions,
+  ]
+})
+
+// 剧集组选项属性
+function episodeGroupItemProps(item: { title: string; subtitle?: string }) {
+  return {
+    title: item.title,
+    subtitle: item.subtitle,
+  }
+}
+
+interface EpisodeGroupOption {
+  title: string
+  subtitle: string
+  value: string | null
+}
+
+// 剧集组选项，保留 null 作为不指定剧集组。
+const episodeGroupOptions = computed<EpisodeGroupOption[]>(() => {
+  const options: EpisodeGroupOption[] = (
+    episodeGroups.value as { id: string; name: string; group_count: number; episode_count: number }[]
+  ).map(item => {
+    return {
+      title: item.name,
+      subtitle: `${t('dialog.reorganize.seasonCount', { count: item.group_count })} • ${t(
+        'dialog.reorganize.episodeCount',
+        { count: item.episode_count },
+      )}`,
+      value: item.id,
+    }
+  })
+
+  options.unshift({
+    title: t('dialog.reorganize.defaultEpisodeGroup'),
+    subtitle: t('dialog.reorganize.defaultEpisodeGroupHint'),
+    value: null,
+  })
+
+  return options
+})
+
+// 查询指定 TMDB 剧集的所有剧集组。
+async function getEpisodeGroups(tmdbId?: number | string) {
+  const normalizedTmdbId = Number(tmdbId)
+  if (!Number.isInteger(normalizedTmdbId) || normalizedTmdbId <= 0) {
+    episodeGroups.value = []
+    return
+  }
+
+  episodeGroupLoading.value = true
+  try {
+    episodeGroups.value = await api.get(`media/groups/${normalizedTmdbId}`)
+  } catch (error) {
+    console.error(error)
+    episodeGroups.value = []
+  } finally {
+    episodeGroupLoading.value = false
+  }
+}
+
+// 标题
+const dialogTitle = computed(() => {
+  return t('dialog.reorganize.manualTitle')
+})
+
+// 副标题
+const dialogSubtitle = computed(() => {
+  if (normalizedItems.value.length) {
+    if (normalizedItems.value.length > 1) {
+      return t('dialog.reorganize.multipleItemsTitle', { count: normalizedItems.value.length })
+    }
+
+    return t('dialog.reorganize.singleItemTitle', { path: normalizedItems.value[0].path })
+  } else if (props.logids?.length) {
+    return t('dialog.reorganize.multipleItemsTitle', { count: props.logids.length })
+  }
+})
+// 禁用指定集数
+const disableEpisodeDetail = computed(() => {
+  if (normalizedItems.value.length) {
+    if (transferForm.episode_format) return false
+    return !(normalizedItems.value.length === 1 && normalizedItems.value[0].type !== 'dir')
+  }
+})
+
+const initialTargetPath = normalizeTargetPath(props.target_path)
+
+// 表单
+const transferForm = reactive<TransferForm>({
+  fileitem: {} as FileItem,
+  logid: 0,
+  target_storage: initialTargetPath ? (props.target_storage ?? 'local') : null,
+  target_path: initialTargetPath,
+  type_name: '',
+  media_source: null,
+  media_id: null,
+  music_type: null,
+  music_release_regions: null,
+  music_release_scripts: null,
+  transfer_type: null,
+  min_filesize: 0,
+  scrape: initialTargetPath ? false : null,
+  from_history: false,
+  library_type_folder: null,
+  library_category_folder: null,
+  episode_group: null,
+  reorganize: Boolean(props.logids?.length),
+})
+
+// 跳过成功记录时，按钮和请求都采用普通整理语义。
+const isReorganize = computed(() =>
+  Boolean(props.logids?.length || (transferForm.reorganize && !skipSuccessfulRecords.value)),
+)
+
+// 切换成功记录处理方式后丢弃旧预览，避免与实际提交范围不一致。
+watch(skipSuccessfulRecords, () => {
+  previewVisible.value = false
+  resetPreviewState()
+})
+
+// 当前是否保留后端自动匹配目的路径的语义。
+const isAutomaticTargetPath = computed(() => !normalizeTargetPath(transferForm.target_path))
+
+// 自动匹配返回的存储使用用户配置名称展示，未知类型回退到稳定标识。
+const matchedTargetStorageLabel = computed(() => {
+  const storage = targetPathMatch.value?.target_storage
+  if (!storage) return t('dialog.reorganize.auto')
+  return storages.value.find(item => item.type === storage)?.name || storage
+})
+
+// 当前手动识别与刮削数据源；自动模式按媒体类型解析实际来源。
+const mediaSource = computed(() => {
+  if (transferForm.media_source) return transferForm.media_source
+  return transferForm.type_name === '音乐' ? 'musicbrainz' : getDefaultMediaSource()
+})
+
+// 当前数据源对应的原生ID标签。
+const mediaIdLabel = computed(() => {
+  const labels: Partial<Record<MediaDataSource, string>> = {
+    themoviedb: t('dialog.reorganize.tmdbId'),
+    douban: t('dialog.reorganize.doubanId'),
+    bangumi: t('dialog.reorganize.bangumiId'),
+    anilist: t('dialog.reorganize.anilistId'),
+    musicbrainz: 'MusicBrainz ID',
+    theaudiodb: 'TheAudioDB ID',
+    doubanmusic: t('dialog.reorganize.doubanId'),
+  }
+  return labels[mediaSource.value] ?? t('dialog.reorganize.mediaId')
+})
+
+// 处理媒体搜索结果选择，同步搜索结果中已识别的媒体类型。
+function handleMediaSelected(item: Pick<MediaInfo, 'type' | 'music_type'>) {
+  const typeName = resolveTransferMediaType(item.type)
+  if (!typeName) return
+
+  transferForm.type_name = typeName
+  if (item.music_type === 'recording' || item.music_type === 'album') {
+    transferForm.music_type = item.music_type
+  }
+}
+
+// 所有媒体库目录
+const directories = ref<TransferDirectoryConf[]>([])
+
+// 查询目录
+async function loadDirectories() {
+  try {
+    directories.value = await listTransferDirectories({ directory_type: 'library' })
+  } catch (error) {
+    console.log(error)
+  }
+}
+
+// 目的目录下拉框，第一项用于把目标路径显式重置为后端自动匹配。
+const targetDirectoryOptions = computed<TargetDirectoryOption[]>(() => {
+  const libraryDirectories = directories.value.map(item => item.library_path).filter(Boolean) as string[]
+  return [
+    {
+      title: t('dialog.reorganize.auto'),
+      value: AUTO_TARGET_PATH_VALUE,
+    },
+    ...[...new Set(libraryDirectories)].map(path => ({
+      title: path,
+      value: path,
+    })),
+  ]
+})
+
+// 目标路径选择值，用哨兵值把界面上的“自动”和接口里的 null 解耦。
+const targetPathSelection = computed({
+  get() {
+    return transferForm.target_path ?? AUTO_TARGET_PATH_VALUE
+  },
+  set(value: string | null) {
+    const targetPath = normalizeTargetPath(value)
+    if (!targetPath || targetPath === AUTO_TARGET_PATH_VALUE) {
+      resetAutomaticTargetConfig()
+      return
+    }
+
+    transferForm.target_path = targetPath
+  },
+})
+
+// 重置为完全自动匹配状态，提交时不携带目标路径及其派生配置。
+function resetAutomaticTargetConfig() {
+  transferForm.target_storage = null
+  transferForm.target_path = null
+  transferForm.transfer_type = null
+  transferForm.scrape = null
+  transferForm.library_type_folder = null
+  transferForm.library_category_folder = null
+}
+
+/** 构造目的路径匹配所需的最小来源请求。 */
+function createTargetPathMatchRequest(): ManualTransferTargetPathRequest | undefined {
+  const targetStorage = normalizeOptionalText(transferForm.target_storage)
+  if (props.logids?.length) {
+    return { logids: [...props.logids], target_storage: targetStorage }
+  }
+  if (!normalizedItems.value.length) return undefined
+  if (normalizedItems.value.length === 1) {
+    return { fileitem: normalizedItems.value[0], target_storage: targetStorage }
+  }
+  return { fileitems: normalizedItems.value, target_storage: targetStorage }
+}
+
+/** 查询自动目的路径，但不覆盖用户已经明确选择的路径。 */
+async function loadTargetPathMatch() {
+  if (!isAutomaticTargetPath.value) return
+  const payload = createTargetPathMatchRequest()
+  if (!payload) return
+
+  const requestId = ++targetPathMatchRequestId
+  targetPathMatchLoading.value = true
+  targetPathMatchFailed.value = false
+  targetPathMatch.value = undefined
+  try {
+    const result = await api.post<ManualTransferTargetPathData>('transfer/manual/target-path', payload, {
+      feedback: 'silent',
+    })
+    if (requestId !== targetPathMatchRequestId || !isAutomaticTargetPath.value) return
+    targetPathMatch.value = result
+  } catch (error) {
+    if (requestId !== targetPathMatchRequestId || !isAutomaticTargetPath.value) return
+    targetPathMatchFailed.value = true
+    console.error('查询手动整理目的路径失败:', error)
+  } finally {
+    if (requestId === targetPathMatchRequestId) targetPathMatchLoading.value = false
+  }
+}
+
+/** 将用户确认的自动匹配结果应用到本次整理表单。 */
+function applyTargetPathMatch() {
+  const match = targetPathMatch.value
+  const targetPath = normalizeTargetPath(match?.target_path)
+  if (!match || !targetPath) return
+
+  transferForm.target_path = targetPath
+  transferForm.target_storage = normalizeOptionalText(match.target_storage) || 'local'
+  transferForm.transfer_type = normalizeOptionalText(match.transfer_type)
+  transferForm.scrape = match.scrape ?? false
+  transferForm.library_type_folder = match.library_type_folder ?? false
+  transferForm.library_category_folder = match.library_category_folder ?? false
+}
+
+// 监听目的路径变化，配置默认值
+watch(
+  () => transferForm.target_path,
+  async newPath => {
+    if (newPath) {
+      const directory = directories.value.find(item => item.library_path === newPath)
+      if (directory) {
+        transferForm.target_storage = directory.library_storage ?? 'local'
+        transferForm.transfer_type = transferForm.transfer_type || directory.transfer_type
+        transferForm.scrape = directory.scraping ?? false
+        transferForm.library_category_folder = directory.library_category_folder ?? false
+        transferForm.library_type_folder = directory.library_type_folder ?? false
+      } else {
+        transferForm.target_storage = transferForm.target_storage || 'local'
+        transferForm.transfer_type = transferForm.transfer_type || 'copy'
+        transferForm.scrape = false
+        transferForm.library_category_folder = false
+        transferForm.library_type_folder = false
+      }
+    } else {
+      // 路径为空时, 恢复到`自动`条件
+      transferForm.transfer_type = null
+      transferForm.library_type_folder = null
+      transferForm.library_category_folder = null
+    }
+  },
+)
+
+// 自动模式下切换目标存储时重新匹配，不在显式路径模式中产生额外请求。
+watch(
+  () => transferForm.target_storage,
+  () => {
+    if (isAutomaticTargetPath.value) void loadTargetPathMatch()
+  },
+)
+
+// 监听媒体编号变化，仅在TMDB电视剧场景加载剧集组。
+watch(
+  () => transferForm.media_id,
+  mediaId => {
+    transferForm.episode_group = null
+    episodeGroups.value = []
+    if (episodeGroupQueryTimer) clearTimeout(episodeGroupQueryTimer)
+    if (transferForm.type_name !== '电视剧' || mediaSource.value !== 'themoviedb') return
+    episodeGroupQueryTimer = setTimeout(() => getEpisodeGroups(mediaId ?? undefined), 400)
+  },
+)
+
+// 切换媒体类型或识别源时，非 TMDB 电视剧不保留剧集组选择。
+watch([() => transferForm.type_name, () => mediaSource.value], ([typeName, source]) => {
+  if (typeName === '电视剧' && source === 'themoviedb' && transferForm.media_id) {
+    getEpisodeGroups(transferForm.media_id)
+    return
+  }
+  transferForm.episode_group = null
+  episodeGroups.value = []
+})
+
+// 切换媒体类型时，若当前数据源与新类型不兼容则回退到自动，
+// 避免音乐源在影视整理中残留；音乐类型未显式选择来源时由 mediaSource 兜底为 MusicBrainz。
+watch(
+  () => transferForm.type_name,
+  typeName => {
+    const isMusicType = typeName === '音乐'
+    const sourceIsMusic = isMusicMediaSource(transferForm.media_source ?? undefined)
+    if (isMusicType !== sourceIsMusic) {
+      transferForm.media_source = null
+    }
+    transferForm.music_type = isMusicType ? (transferForm.music_type ?? defaultMusicEntity.value) : null
+    if (!isMusicType) {
+      customMusicReleasePreference.value = false
+      transferForm.music_release_regions = null
+      transferForm.music_release_scripts = null
+    }
+  },
+)
+
+watch(
+  () => transferForm.music_type,
+  musicType => {
+    artistCollectionEntries.value = undefined
+    if (musicType === 'artist_collection') {
+      transferForm.media_id = null
+      mediaSelectorDialog.value = false
+    }
+    resetPreviewState()
+  },
+)
+
+watch(customMusicReleasePreference, enabled => {
+  if (enabled) {
+    applyDefaultMusicReleasePreference()
+    return
+  }
+  transferForm.music_release_regions = null
+  transferForm.music_release_scripts = null
+})
+
+// 切换数据源时清空上一来源的原生ID，避免把同一数字误传给新来源。
+watch(
+  () => transferForm.media_source,
+  (source, previousSource) => {
+    if (source !== previousSource) {
+      transferForm.media_id = null
+      mediaSelectorDialog.value = false
+    }
+    if (isMusicMediaSource(source ?? undefined) && transferForm.type_name !== '音乐') {
+      transferForm.type_name = '音乐'
+    }
+  },
+)
+
+/** 按当前来源校验手动整理使用的原生媒体 ID。 */
+function validateMediaId(value?: string | number | null) {
+  return isValidMediaSourceId(value, mediaSource.value) || t('dialog.reorganize.mediaIdInvalid')
+}
+
+watch(
+  () => transferForm.episode_group,
+  episodeGroup => {
+    const normalizedEpisodeGroup = normalizeEpisodeGroup(episodeGroup)
+    if (episodeGroup !== normalizedEpisodeGroup) {
+      transferForm.episode_group = normalizedEpisodeGroup
+    }
+  },
+)
+
+// 过滤并排序后的预览数据
+const filteredPreviewItems = computed(() => {
+  const items = [...(previewData.value?.items ?? [])]
+
+  return items.sort((a, b) => {
+    // 1. 获取季号（如果有的话优先按季号排）
+    const seasonA = getPreviewSeasonNumber(a)
+    const seasonB = getPreviewSeasonNumber(b)
+    if (seasonA !== seasonB) {
+      if (seasonA === undefined) return 1
+      if (seasonB === undefined) return -1
+      return seasonA - seasonB
+    }
+
+    // 2. 获取集数
+    const epA = toPreviewNumber(a.episode)
+    const epB = toPreviewNumber(b.episode)
+
+    // 如果都有集数，按集数排序
+    if (epA !== undefined && epB !== undefined) {
+      if (epA !== epB) return epA - epB
+      // 集数相同（可能是同集的视频、字幕等），退化到按文件名排序，保证相关文件挨在一起
+    }
+
+    // 3. 有集数的排前面，没集数的（通常是其他文件）排后面
+    if (epA !== undefined && epB === undefined) return -1
+    if (epA === undefined && epB !== undefined) return 1
+
+    // 4. 如果都没集数，或者集数完全相同，则按照目标路径（或源路径）的字母顺序排
+    const nameA = a.target || a.source || ''
+    const nameB = b.target || b.source || ''
+    return nameA.localeCompare(nameB, undefined, { numeric: true })
+  })
+})
+
+// 分页后的预览数据（含文件名解析）
+const pagedPreviewRows = computed(() => {
+  const start = (previewPage.value - 1) * previewPageSize.value
+  return filteredPreviewItems.value.slice(start, start + previewPageSize.value).map(item => {
+    const sourceName = getFileName(item.source)
+    const targetName = getFileName(item.target)
+    return {
+      ...item,
+      sourceName,
+      targetName,
+      sameName: sourceName === targetName,
+    }
+  })
+})
+
+const artistCollectionPreviewGroups = computed(() => {
+  const groups = new Map<
+    string,
+    {
+      name: string
+      entity: 'album' | 'recording'
+      items: Array<ManualTransferPreviewItem & { sourceName: string; targetName: string }>
+    }
+  >()
+  filteredPreviewItems.value.forEach(item => {
+    const name = item.collection_group || t('dialog.reorganize.artistCollectionSingles')
+    const entity = item.collection_entity || 'album'
+    const group = groups.get(name) || { name, entity, items: [] }
+    group.items.push({
+      ...item,
+      sourceName: getFileName(item.source),
+      targetName: getFileName(item.target),
+    })
+    groups.set(name, group)
+  })
+  return [...groups.values()]
+})
+
+// 预览统计
+const previewSummary = computed(() => {
+  return (
+    previewData.value?.summary ?? {
+      total: 0,
+      success: 0,
+      failed: 0,
+    }
+  )
+})
+
+// 分页总数
+const previewTotalPages = computed(() => {
+  return Math.ceil(filteredPreviewItems.value.length / previewPageSize.value)
+})
+
+// 标准化路径
+function normalizePath(path?: string) {
+  return (path || '').replace(/\\/g, '/')
+}
+
+// 获取文件名
+function getFileName(path?: string) {
+  const normalizedPath = normalizePath(path).replace(/\/+$/, '')
+  if (!normalizedPath) return '-'
+  return normalizedPath.split('/').pop() || normalizedPath
+}
+
+// 获取唯一非空值
+function getUniqueValues(values: (string | undefined)[]) {
+  return [...new Set(values.map(item => item?.trim()).filter(Boolean) as string[])]
+}
+
+// 归一化可选目的路径，保证未指定时向接口传递 null 而不是空字符串。
+function normalizeTargetPath(path?: string | null) {
+  const normalizedPath = path?.trim()
+  return normalizedPath || null
+}
+
+// 归一化可选文本参数，保证自动项提交 null 而不是空字符串。
+function normalizeOptionalText(value?: string | null) {
+  const normalizedValue = value?.trim()
+  return normalizedValue || null
+}
+
+// 归一化剧集组值，兼容历史对象态值。
+function normalizeEpisodeGroup(episodeGroup?: string | { value?: string | null } | null) {
+  if (!episodeGroup) return null
+  if (typeof episodeGroup === 'string') {
+    const normalizedEpisodeGroup = episodeGroup.trim()
+    return normalizedEpisodeGroup || null
+  }
+  if (typeof episodeGroup === 'object' && typeof episodeGroup.value === 'string') {
+    const normalizedEpisodeGroup = episodeGroup.value.trim()
+    return normalizedEpisodeGroup || null
+  }
+  return null
+}
+
+// 统一解析接口返回的数字字段，兼容 string/number
+function toPreviewNumber(value: unknown) {
+  if (value === undefined || value === null || value === '') return undefined
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+// 从路径或文件名中回退提取季号
+function extractSeasonFromText(text?: string) {
+  if (!text) return undefined
+
+  const patterns = [/S(\d{1,2})E\d{1,4}/i, /Season[\s._-]*(\d{1,2})/i, /第\s*(\d{1,2})\s*季/i]
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern)
+    if (match?.[1]) {
+      const season = toPreviewNumber(match[1])
+      if (season !== undefined) return season
+    }
+  }
+
+  return undefined
+}
+
+// 获取预览项季号，优先使用响应字段，缺失时从目标/源路径回退提取
+function getPreviewSeasonNumber(item: ManualTransferPreviewItem) {
+  const season = toPreviewNumber(item.season)
+  if (season !== undefined) return season
+
+  return (
+    extractSeasonFromText(item.target) ??
+    extractSeasonFromText(item.target_dir) ??
+    extractSeasonFromText(item.source) ??
+    (toPreviewNumber(item.episode) !== undefined && !previewIsMovie.value ? 1 : undefined)
+  )
+}
+
+// 顶部媒体信息
+const previewMediaInfo = computed(() => {
+  if (isArtistCollectionMode.value) {
+    const root = normalizedItems.value[0]
+    return {
+      title: root?.name || getFileName(root?.path) || '-',
+      type: t('dialog.reorganize.artistCollection'),
+    }
+  }
+  const titles = getUniqueValues(filteredPreviewItems.value.map(item => item.title))
+  const types = getUniqueValues(filteredPreviewItems.value.map(item => item.type))
+
+  const titleText = titles.length <= 1 ? titles[0] || '-' : `${titles[0]} +${titles.length - 1}`
+  const typeText = types.length <= 1 ? types[0] || t('common.unknown') : types.join(' / ')
+
+  return {
+    title: titleText,
+    type: typeText,
+  }
+})
+
+// 是否为电影
+const previewIsMovie = computed(() => {
+  const type = previewMediaInfo.value.type.toLowerCase()
+  return type === '电影' || type === 'movie'
+})
+
+// 顶部季信息
+const previewSeasonText = computed(() => {
+  const seasons = [
+    ...new Set(
+      filteredPreviewItems.value
+        .map(item => getPreviewSeasonNumber(item))
+        .filter((season): season is number => season !== undefined && season !== null),
+    ),
+  ]
+
+  if (seasons.length === 0) return '-'
+
+  const seasonLabels = seasons.sort((a, b) => a - b).map(season => `S${String(season).padStart(2, '0')}`)
+
+  if (seasonLabels.length === 1) return seasonLabels[0]
+  return `${seasonLabels[0]} +${seasonLabels.length - 1}`
+})
+
+// 顶部总集数
+const previewEpisodeCountText = computed(() => {
+  const episodeKeys = new Set<string>()
+
+  filteredPreviewItems.value.forEach(item => {
+    const season = getPreviewSeasonNumber(item) ?? 1
+    const episode = toPreviewNumber(item.episode)
+    const episodeEnd = toPreviewNumber(item.episode_end) ?? episode
+
+    if (episode === undefined) return
+
+    for (let currentEpisode = episode; currentEpisode <= (episodeEnd ?? episode); currentEpisode++) {
+      episodeKeys.add(`${season}-${currentEpisode}`)
+    }
+  })
+
+  if (episodeKeys.size > 0) return String(episodeKeys.size)
+  if (filteredPreviewItems.value.length > 0) return String(filteredPreviewItems.value.length)
+  return '-'
+})
+
+// 文件列表
+const previewFileRows = computed(() => {
+  return filteredPreviewItems.value.map(item => {
+    const sourceName = getFileName(item.source)
+    const targetName = getFileName(item.target)
+
+    return {
+      sourceName,
+      targetName,
+      sameName: sourceName === targetName,
+      success: item.success,
+      message: item.message || '-',
+      source: item.source,
+      target: item.target,
+    }
+  })
+})
+
+// 标准化预览项中的识别词命中详情
+function getPreviewApplyWords(item: ManualTransferPreviewItem) {
+  return [
+    ...new Set((item.apply_words ?? []).map(word => word?.trim()).filter((word): word is string => Boolean(word))),
+  ]
+}
+
+// 手动整理识别词应用详情
+const previewCustomWordDetails = computed(() => {
+  const groupedDetails = new Map<string, { sourceNames: string[]; orgString?: string; applyWords: string[] }>()
+
+  filteredPreviewItems.value.forEach(item => {
+    const applyWords = getPreviewApplyWords(item)
+    if (!applyWords.length) return
+
+    const sourceName = getFileName(item.source)
+    const orgString = item.org_string?.trim() || undefined
+    const detailKey = JSON.stringify(applyWords)
+    const existingDetail = groupedDetails.get(detailKey)
+
+    if (existingDetail) {
+      if (!existingDetail.sourceNames.includes(sourceName)) existingDetail.sourceNames.push(sourceName)
+      return
+    }
+
+    groupedDetails.set(detailKey, {
+      sourceNames: [sourceName],
+      orgString,
+      applyWords,
+    })
+  })
+
+  return [...groupedDetails.values()].map(detail => ({
+    sourceName:
+      detail.sourceNames.length > 1
+        ? t('dialog.reorganize.customWordsSameRules', { count: detail.sourceNames.length })
+        : detail.sourceNames[0],
+    orgString: detail.sourceNames.length > 1 ? undefined : detail.orgString,
+    applyWords: detail.applyWords,
+  }))
+})
+
+const previewEpisodeFormatRuleDetails = computed(() => {
+  const episodeFormat = transferForm.episode_format?.trim()
+  if (!episodeFormat) return []
+
+  const rulePattern = episodeFormatRecommendState.rulePattern?.trim()
+  const isGeneratedEpisodeFormat =
+    Boolean(episodeFormatRecommendState.generatedFormat) &&
+    episodeFormatRecommendState.generatedFormat === episodeFormat
+
+  if (!isGeneratedEpisodeFormat || !episodeFormatRecommendState.ruleName) {
+    return [
+      {
+        sourceName: t('dialog.reorganize.episodeFormatManualInput'),
+        orgString: t('dialog.reorganize.episodeFormatFinal', {
+          format: episodeFormat,
+        }),
+        applyWords: [],
+      },
+    ]
+  }
+
+  return [
+    {
+      sourceName: t('dialog.reorganize.episodeFormatRecommendRule', {
+        rule: episodeFormatRecommendState.ruleName,
+      }),
+      orgString: t('dialog.reorganize.episodeFormatFinal', {
+        format: episodeFormat,
+      }),
+      applyWords: rulePattern
+        ? [
+            t('dialog.reorganize.episodeFormatRulePattern', {
+              pattern: rulePattern,
+            }),
+          ]
+        : [],
+    },
+  ]
+})
+
+const previewRecognitionDetails = computed(() => [
+  ...previewCustomWordDetails.value,
+  ...previewEpisodeFormatRuleDetails.value,
+])
+
+const previewRecognitionDetailTitle = computed(() => {
+  return previewCustomWordDetails.value.length
+    ? t('dialog.reorganize.customWordsApplied')
+    : t('dialog.reorganize.episodeFormatRuleDetails')
+})
+
+// 是否需要拓宽窗口
+const previewNeedsWideLayout = computed(() => {
+  const candidates = [...previewFileRows.value.map(item => `${item.sourceName}${item.targetName}`)]
+
+  return candidates.some(item => item.length > 72)
+})
+
+// 弹窗宽度
+const dialogMaxWidth = computed(() => {
+  if (!display.mdAndUp.value) return '100%'
+
+  if (!previewVisible.value) return 'min(45rem, calc(100vw - 2rem))'
+
+  const preferredWidth = previewNeedsWideLayout.value ? '126rem' : '110rem'
+  return `min(${preferredWidth}, calc(100vw - 2rem))`
+})
+
+// 预览按钮图标
+const previewToggleIcon = computed(() => {
+  return previewVisible.value ? 'mdi-eye-off-outline' : 'mdi-eye-outline'
+})
+
+// 获取文件父目录键，用于判断多文件是否来自同一目录。
+function getFileParentKey(item?: FileItem) {
+  if (!item?.path) return ''
+  const storage = item.storage ?? 'local'
+  const pathParts = item.path.split('/')
+  pathParts.pop()
+  const parentPath = pathParts.join('/') || '/'
+  return `${storage}|${parentPath}`
+}
+
+const episodeFormatRecommendSelectedFileItems = computed(() => {
+  return shouldUseBatchFileItems(normalizedItems.value) ? normalizedItems.value : []
+})
+
+const episodeFormatRecommendHasValidSelectedFiles = computed(() => {
+  if (episodeFormatRecommendSelectedFileItems.value.length <= 1) return false
+
+  const directoryKeys = new Set(episodeFormatRecommendSelectedFileItems.value.map(item => getFileParentKey(item)))
+  return directoryKeys.size === 1
+})
+
+const episodeFormatRecommendSourceItem = computed<FileItem | undefined>(() => {
+  if (normalizedItems.value.length !== 1) return undefined
+  return normalizedItems.value[0]
+})
+
+const canRecommendEpisodeFormat = computed(() => {
+  return (
+    (Boolean(episodeFormatRecommendSourceItem.value?.path) || episodeFormatRecommendHasValidSelectedFiles.value) &&
+    !progressDialog.value &&
+    !episodeFormatRecommendState.loading
+  )
+})
+
+const episodeFormatRecommendSelectionKey = computed(() => {
+  const sourceItem = episodeFormatRecommendSourceItem.value
+  if (sourceItem) return getFileItemKey(sourceItem)
+  return episodeFormatRecommendSelectedFileItems.value.map(item => getFileItemKey(item)).join('||')
+})
+
+const episodeFormatRecommendTooltip = computed(() => {
+  if (episodeFormatRecommendState.loading) return t('dialog.reorganize.episodeFormatRecommendLoading')
+  if (normalizedItems.value.length > 1 && !episodeFormatRecommendHasValidSelectedFiles.value) {
+    return t('dialog.reorganize.episodeFormatRecommendInvalidSelection')
+  }
+  if (!episodeFormatRecommendSourceItem.value?.path && !episodeFormatRecommendHasValidSelectedFiles.value) {
+    return t('dialog.reorganize.episodeFormatRecommendSelectFile')
+  }
+  if (episodeFormatRuleConfigured.value === false) return t('dialog.reorganize.episodeFormatRecommendNeedWords')
+  return t('dialog.reorganize.episodeFormatRecommendAction')
+})
+
+watch(
+  episodeFormatRecommendSelectionKey,
+  () => {
+    transferForm.fileitem = episodeFormatRecommendSourceItem.value ?? ({} as FileItem)
+    episodeFormatRecommendState.ruleName = undefined
+    episodeFormatRecommendState.rulePattern = undefined
+    episodeFormatRecommendState.generatedFormat = undefined
+    episodeFormatRecommendState.sampleFile = undefined
+    episodeFormatRecommendState.lastMessage = undefined
+  },
+  { immediate: true },
+)
+
+// 判断文件集合是否可以按批量文件请求提交。
+// 整理历史中的旧 FileItem 可能没有 type，但仍会保留文件扩展名或完整路径；
+// 这类记录必须继续作为一个批次提交，否则专辑会被拆成逐曲请求而丢失专辑上下文。
+function isFileLikeItem(item: FileItem) {
+  if (item.type === 'file') return true
+  if (item.type === 'dir') return false
+  if (item.extension?.trim()) return true
+
+  const itemPath = item.path || item.name || ''
+  const basename = itemPath.split(/[\\/]/).pop() || ''
+  return /\.[^.]+$/.test(basename)
+}
+
+/** 文件集合统一批量提交，目录则保留各自的展开范围。 */
+function shouldUseBatchFileItems(items: FileItem[]) {
+  return items.length > 0 && items.every(isFileLikeItem)
+}
+
+// 生成批量文件在提示和错误信息中的显示名称。
+function getBatchItemsLabel(items: FileItem[]) {
+  if (items.length === 1) return items[0].path || items[0].name
+  return t('dialog.reorganize.multipleItemsTitle', { count: items.length })
+}
+
+// 预览、立即整理和加入队列共用请求参数，保证成功记录处理方式一致。
+function createTransferPayload(options: {
+  item?: FileItem
+  items?: FileItem[]
+  logid?: number
+  logids?: number[]
+  preview?: boolean
+  musicType?: 'album' | 'recording'
+}) {
+  const sourceItem = options.item ?? (options.items?.length ? options.items[0] : ({} as FileItem))
+  const normalizedMediaId = normalizeOptionalText(transferForm.media_id)
+  const payload: ManualTransferPayload = {
+    ...transferForm,
+    reorganize: isReorganize.value,
+    skip_success: skipSuccessfulRecords.value,
+    fileitem: sourceItem,
+    logid: options.logid ?? 0,
+    target_storage: normalizeOptionalText(transferForm.target_storage),
+    target_path: normalizeTargetPath(transferForm.target_path),
+    transfer_type: normalizeOptionalText(transferForm.transfer_type),
+    media_source: undefined,
+    media_id: undefined,
+    episode_group: normalizeEpisodeGroup(transferForm.episode_group),
+    music_type:
+      options.musicType ?? (transferForm.music_type === 'artist_collection' ? 'album' : transferForm.music_type),
+  }
+
+  if (normalizedMediaId) {
+    payload.media_source = mediaSource.value
+    payload.media_id = normalizedMediaId
+  }
+
+  if (options.items?.length) {
+    payload.fileitems = options.items
+    if (!options.item) {
+      // 文件集合请求以 fileitems 为准，避免残留 fileitem 状态把请求误导成目录语义。
+      delete payload.fileitem
+    }
+  }
+  if (options.logids?.length) {
+    payload.logids = options.logids
+    // 历史集合请求以 logids 为准，必须保留完整专辑上下文。
+    delete payload.fileitem
+    delete payload.logid
+  }
+  if (options.preview) payload.preview = true
+  return payload
+}
+
+function annotateCollectionPreview(
+  data: ManualTransferPreviewData,
+  entry: ArtistCollectionEntry,
+): ManualTransferPreviewData {
+  return {
+    ...data,
+    items: (data.items ?? []).map(item => ({
+      ...item,
+      collection_group: entry.group,
+      collection_entity: entry.musicType,
+    })),
+  }
+}
+
+// 请求整理接口
+async function requestManualTransfer<T = unknown>(
+  payload: ManualTransferPayload,
+  background: boolean = false,
+): Promise<T> {
+  const overrides = payload.preview ? [] : getTargetOverrides(previewData.value?.items ?? [], targetEdits.value)
+  if (overrides.length) {
+    if (!props.logids?.length || hasTargetEditErrors.value) throw new Error('请修正整理后的路径再提交')
+    return await api.post<T>(`plugin/Rapid115Upload/reorganize?background=${background}`,
+      { request: payload, overrides }, { feedback: 'silent' })
+  }
+  return await api.post<T>(`transfer/manual?background=${background}`, payload, { feedback: 'silent' })
+}
+
+/** 保留业务失败详情，并在空消息时使用当前操作的本地提示。 */
+function getManualTransferErrorMessage(error: unknown, fallback: string) {
+  const businessMessage = getApiBusinessErrorMessage(error)
+  if (businessMessage) return businessMessage
+  if (isApiBusinessFailure(error)) return fallback
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
+// 查询当前文件或目录是否存在成功整理历史，决定是否展示重新整理语义。
+async function loadManualTransferHistory() {
+  if (props.logids?.length || !normalizedItems.value.length) return
+
+  manualHistoryLoading.value = true
+  try {
+    const payload =
+      normalizedItems.value.length === 1 ? { fileitem: normalizedItems.value[0] } : { fileitems: normalizedItems.value }
+    const result = await api.post<ManualTransferHistoryInfo>('transfer/manual/history', payload, {
+      feedback: 'silent',
+    })
+
+    manualHistoryCount.value = result.history_count ?? 0
+    transferForm.reorganize = Boolean(result.reorganize)
+  } catch (error) {
+    console.error(error)
+  } finally {
+    manualHistoryLoading.value = false
+  }
+}
+
+// 加载剧集格式规则配置状态，用于决定是否允许自动推荐。
+async function loadEpisodeFormatRuleConfiguration() {
+  try {
+    const result = await api.get<{ value?: unknown[] }>('system/setting/public/EpisodeFormatRuleTable')
+    episodeFormatRuleConfigured.value = Boolean(result.value?.length)
+  } catch (error) {
+    console.log(error)
+    episodeFormatRuleConfigured.value = undefined
+  }
+}
+
+// 根据当前文件或同目录多文件请求推荐剧集格式。
+async function handleRecommendEpisodeFormat() {
+  const sourceItem = episodeFormatRecommendSourceItem.value
+  const selectedFileItems = episodeFormatRecommendSelectedFileItems.value
+  const hasValidSelectedFiles = episodeFormatRecommendHasValidSelectedFiles.value
+  if (!sourceItem?.path && !hasValidSelectedFiles) {
+    $toast.warning(
+      normalizedItems.value.length > 1
+        ? t('dialog.reorganize.episodeFormatRecommendInvalidSelection')
+        : t('dialog.reorganize.episodeFormatRecommendSelectFile'),
+    )
+    return
+  }
+
+  if (episodeFormatRuleConfigured.value === false) {
+    $toast.warning(t('dialog.reorganize.episodeFormatRecommendNeedWords'))
+    return
+  }
+
+  episodeFormatRecommendState.loading = true
+
+  try {
+    const hasExistingEpisodeFormat = Boolean(transferForm.episode_format?.trim())
+    const data = await api.post<EpisodeFormatRecommendData>(
+      'transfer/episode-format/recommend',
+      hasValidSelectedFiles
+        ? {
+            fileitems: selectedFileItems,
+          }
+        : {
+            fileitem: sourceItem,
+          },
+      { feedback: 'silent' },
+    )
+
+    if (!data.episode_format) {
+      $toast.error(t('dialog.reorganize.episodeFormatRecommendFailed'))
+      return
+    }
+
+    transferForm.episode_format = data.episode_format
+    episodeFormatRecommendState.ruleName = data.rule_name
+    episodeFormatRecommendState.rulePattern = data.pattern
+    episodeFormatRecommendState.generatedFormat = data.episode_format
+    episodeFormatRecommendState.sampleFile = data.sample_file
+    episodeFormatRecommendState.lastMessage = data.message
+
+    $toast.success(
+      hasExistingEpisodeFormat
+        ? t('dialog.reorganize.episodeFormatRecommendOverwriteSuccess')
+        : t('dialog.reorganize.episodeFormatRecommendSuccess'),
+    )
+  } catch (error: any) {
+    console.log(error)
+    $toast.error(error?.message || t('dialog.reorganize.episodeFormatRecommendFailed'))
+  } finally {
+    episodeFormatRecommendState.loading = false
+  }
+}
+
+// 创建空预览数据，作为多次预览结果的合并目标。
+function getDefaultPreviewData(): ManualTransferPreviewData {
+  return {
+    summary: {
+      total: 0,
+      success: 0,
+      failed: 0,
+    },
+    items: [],
+    message: '',
+  }
+}
+
+// 重置预览数据和分页状态。
+function resetPreviewState() {
+  targetEdits.value = {}
+  previewData.value = undefined
+  previewLoaded.value = false
+  previewPage.value = 1
+}
+
+// 表单或记录变化后，旧预览与路径覆盖不可用于另一批整理。
+watch([transferForm, () => props.logids, () => props.items, skipSuccessfulRecords], () => {
+  previewRevision += 1
+  resetPreviewState()
+}, { deep: true, flush: 'sync' })
+
+// 判断预览结果中是否存在失败项。
+function previewHasFailures(data?: ManualTransferPreviewData) {
+  if (!data) return false
+
+  return (data.summary.failed ?? 0) > 0 || (data.items ?? []).some(item => item.success === false)
+}
+
+// 生成预览结果成功和失败数量摘要。
+function getPreviewResultSummaryMessage(data?: ManualTransferPreviewData) {
+  const success = data?.summary.success ?? 0
+  const failed = data?.summary.failed ?? 0
+
+  return [
+    t('dialog.reorganize.previewSuccess', { count: success }),
+    t('dialog.reorganize.previewFailed', { count: failed }),
+  ].join('，')
+}
+
+// 构造单条失败预览数据，便于把异常请求合并到预览列表。
+function createFailedPreviewData(options: { source?: string; type?: string; title?: string; message?: string }) {
+  const failedItem: ManualTransferPreviewItem = {
+    source: options.source,
+    target: '',
+    success: false,
+    message: options.message || t('dialog.reorganize.previewRequestFailed'),
+    type: options.type,
+    title: options.title,
+  }
+
+  return {
+    summary: {
+      total: 1,
+      success: 0,
+      failed: 1,
+    },
+    items: [failedItem],
+    message: failedItem.message,
+  } satisfies ManualTransferPreviewData
+}
+
+// 合并多次预览结果
+function mergePreviewData(target: ManualTransferPreviewData, incoming?: ManualTransferPreviewData) {
+  if (!incoming) return
+
+  const mergedItems = [...(target.items ?? [])]
+  const existingItemKeys = new Set(mergedItems.map(item => getPreviewItemKey(item)))
+
+  ;(incoming.items ?? []).forEach(item => {
+    const itemKey = getPreviewItemKey(item)
+    if (existingItemKeys.has(itemKey)) return
+
+    existingItemKeys.add(itemKey)
+    mergedItems.push(item)
+  })
+
+  target.items = mergedItems
+  target.summary.total = mergedItems.length
+  target.summary.success = mergedItems.filter(item => item.success !== false).length
+  target.summary.failed = mergedItems.filter(item => item.success === false).length
+
+  if (incoming.message) {
+    target.message = [target.message, incoming.message].filter(Boolean).join('；')
+  }
+}
+
+// 预览整理结果
+async function previewTransfer() {
+  if (!props.logids?.length && !normalizedItems.value.length) return
+
+  previewLoading.value = true
+  resetPreviewState()
+
+  const revision = previewRevision
+  const mergedPreviewData = getDefaultPreviewData()
+
+  try {
+    if (isArtistCollectionMode.value) {
+      const entries = await loadArtistCollectionEntries()
+      for (const [index, entry] of entries.entries()) {
+        progressText.value = t('dialog.reorganize.artistCollectionProgress', {
+          current: index + 1,
+          total: entries.length,
+          name: entry.group,
+        })
+        try {
+          const result = await requestManualTransfer<ManualTransferPreviewData>(
+            createTransferPayload({ item: entry.item, preview: true, musicType: entry.musicType }),
+          )
+          mergePreviewData(mergedPreviewData, annotateCollectionPreview(result, entry))
+        } catch (err: unknown) {
+          const errorMessage = getManualTransferErrorMessage(err, t('dialog.reorganize.previewRequestFailed'))
+          mergePreviewData(
+            mergedPreviewData,
+            annotateCollectionPreview(
+              createFailedPreviewData({
+                source: entry.item.path || entry.item.name,
+                type: entry.item.type,
+                title: entry.group,
+                message: errorMessage,
+              }),
+              entry,
+            ),
+          )
+        }
+      }
+      if (revision !== previewRevision) return
+      previewData.value = mergedPreviewData
+      previewLoaded.value = true
+      if (previewHasFailures(mergedPreviewData)) $toast.warning(getPreviewResultSummaryMessage(mergedPreviewData))
+      return
+    }
+
+    const tasks: Promise<void>[] = []
+
+    if (normalizedItems.value.length) {
+      if (shouldUseBatchFileItems(normalizedItems.value)) {
+        try {
+          const result = await requestManualTransfer<ManualTransferPreviewData>(
+            createTransferPayload({ items: normalizedItems.value, preview: true }),
+          )
+          mergePreviewData(mergedPreviewData, result)
+        } catch (err: unknown) {
+          const errorMessage = getManualTransferErrorMessage(err, t('dialog.reorganize.previewRequestFailed'))
+          console.warn(`预览请求异常: ${errorMessage}`)
+          mergePreviewData(
+            mergedPreviewData,
+            createFailedPreviewData({
+              source: getBatchItemsLabel(normalizedItems.value),
+              message: errorMessage,
+            }),
+          )
+        }
+      } else {
+        tasks.push(
+          ...normalizedItems.value.map(async item => {
+            try {
+              const result = await requestManualTransfer<ManualTransferPreviewData>(
+                createTransferPayload({ item, preview: true }),
+              )
+              mergePreviewData(mergedPreviewData, result)
+            } catch (err: unknown) {
+              const errorMessage = getManualTransferErrorMessage(err, t('dialog.reorganize.previewRequestFailed'))
+              console.warn(`预览请求异常: ${errorMessage}`)
+              mergePreviewData(
+                mergedPreviewData,
+                createFailedPreviewData({
+                  source: item.path || item.name,
+                  type: item.type,
+                  title: item.name,
+                  message: errorMessage,
+                }),
+              )
+            }
+          }),
+        )
+      }
+    }
+
+    if (props.logids?.length) {
+      const historyIds = [...props.logids]
+      tasks.push(
+        (async () => {
+          try {
+            const result = await requestManualTransfer<ManualTransferPreviewData>(
+              createTransferPayload({ logids: historyIds, preview: true }),
+            )
+            mergePreviewData(mergedPreviewData, result)
+          } catch (err: unknown) {
+            const errorMessage = getManualTransferErrorMessage(err, t('dialog.reorganize.previewRequestFailed'))
+            console.warn(`预览请求异常: ${errorMessage}`)
+            mergePreviewData(
+              mergedPreviewData,
+              createFailedPreviewData({
+                source: t('dialog.reorganize.multipleItemsTitle', { count: historyIds.length }),
+                message: errorMessage,
+              }),
+            )
+          }
+        })(),
+      )
+    }
+
+    await Promise.all(tasks)
+
+    if (revision !== previewRevision) return
+    previewData.value = mergedPreviewData
+    previewLoaded.value = true
+
+    if (previewHasFailures(mergedPreviewData)) {
+      $toast.warning(getPreviewResultSummaryMessage(mergedPreviewData))
+    }
+  } catch (error: unknown) {
+    previewVisible.value = false
+    resetPreviewState()
+    $toast.error(getManualTransferErrorMessage(error, t('dialog.reorganize.previewRequestFailed')))
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+// 切换预览面板，首次展开时拉取最新预览结果。
+async function togglePreview() {
+  if (previewLoading.value) return
+
+  if (previewVisible.value) {
+    previewVisible.value = false
+    return
+  }
+
+  previewVisible.value = true
+  await previewTransfer()
+}
+
+// 整理文件
+async function handleTransfer(item: FileItem, background: boolean = false, musicType?: 'album' | 'recording') {
+  try {
+    const result = await requestManualTransfer<ManualTransferSubmissionData>(
+      createTransferPayload({ item, musicType }),
+      background,
+    )
+    collectSubmissionResults(result)
+    if (background && !result?.items?.length) $toast.success(t('dialog.reorganize.successMessage', { name: item.name }))
+    return true
+  } catch (error: unknown) {
+    collectSubmissionFailure(error)
+    console.log(error)
+    $toast.error(getManualTransferErrorMessage(error, t('dialog.reorganize.transferRequestFailed')))
+    return false
+  }
+}
+
+// 批量整理文件并按后台模式决定是否提示入队成功。
+async function handleTransferBatch(items: FileItem[], background: boolean = false) {
+  try {
+    const result = await requestManualTransfer<ManualTransferSubmissionData>(
+      createTransferPayload({ items }),
+      background,
+    )
+    collectSubmissionResults(result)
+    if (background && !result?.items?.length)
+      $toast.success(t('dialog.reorganize.successMessage', { name: getBatchItemsLabel(items) }))
+    return true
+  } catch (error: unknown) {
+    collectSubmissionFailure(error)
+    console.log(error)
+    $toast.error(getManualTransferErrorMessage(error, t('dialog.reorganize.transferRequestFailed')))
+    return false
+  }
+}
+
+// 将选中的整理历史作为同一个媒体批次提交。
+async function handleTransferLogs(logids: number[], background: boolean = false) {
+  try {
+    const result = await requestManualTransfer<ManualTransferSubmissionData>(
+      createTransferPayload({ logids }),
+      background,
+    )
+    collectSubmissionResults(result)
+    if (background && !result?.items?.length) {
+      $toast.success(
+        t('dialog.reorganize.successMessage', {
+          name: t('dialog.reorganize.multipleItemsTitle', { count: logids.length }),
+        }),
+      )
+    }
+    return true
+  } catch (error: unknown) {
+    collectSubmissionFailure(error)
+    console.log(error)
+    $toast.error(getManualTransferErrorMessage(error, t('dialog.reorganize.transferRequestFailed')))
+    return false
+  }
+}
+
+// 进度SSE消息处理函数
+function handleProgressMessage(event: MessageEvent) {
+  const progress = JSON.parse(event.data)
+  if (progress) {
+    progressText.value = progress.text_i18n || progress.text
+    progressValue.value = progress.value
+  }
+}
+
+// 使用SSE监听加载进度
+function startLoadingProgress(key: string) {
+  progressText.value = t('dialog.reorganize.processing')
+  progressActive.value = true
+
+  // 如果已经有连接，先停止
+  if (progressSSE.value) {
+    progressSSE.value.stop()
+  }
+
+  const url = `${import.meta.env.VITE_API_BASE_URL}system/progress/${key}`
+
+  // 创建新的SSE连接
+  progressSSE.value = useProgressSSE(url, handleProgressMessage, `reorganize-progress-${key}`, progressActive)
+
+  progressSSE.value.start()
+}
+
+// 停止监听加载进度
+function stopLoadingProgress() {
+  progressActive.value = false
+  if (progressSSE.value) {
+    progressSSE.value.stop()
+    progressSSE.value = null
+  }
+}
+
+// 整理文件
+async function transfer(background: boolean = false) {
+  if (
+    (!props.logids?.length && !normalizedItems.value.length) ||
+    transferSubmitting.value ||
+    hasAcceptedSubmission.value
+  )
+    return
+
+  if (previewLoading.value || hasTargetEditErrors.value) {
+    $toast.warning('请等待预览完成，并修正整理后的路径')
+    return
+  }
+
+  submissionResults.value = []
+  transferSubmitting.value = true
+  progressDialog.value = true
+  let allSucceeded = true
+
+  try {
+    if (isArtistCollectionMode.value) {
+      try {
+        const entries = await loadArtistCollectionEntries()
+        for (const [index, entry] of entries.entries()) {
+          if (!background)
+            startLoadingProgress(
+              entry.musicType === 'album' ? 'filetransfer' : CryptoJS.MD5(entry.item.path).toString(),
+            )
+          progressText.value = t('dialog.reorganize.artistCollectionProgress', {
+            current: index + 1,
+            total: entries.length,
+            name: entry.group,
+          })
+          allSucceeded = (await handleTransfer(entry.item, background, entry.musicType)) && allSucceeded
+        }
+        if (allSucceeded && !submissionResults.value.length) emit('done')
+      } catch (error: unknown) {
+        allSucceeded = false
+        $toast.error(getManualTransferErrorMessage(error, t('dialog.reorganize.artistCollectionScanFailed')))
+      }
+      return
+    }
+
+    // 文件整理
+    if (normalizedItems.value.length) {
+      if (shouldUseBatchFileItems(normalizedItems.value)) {
+        if (!background) {
+          startLoadingProgress('filetransfer')
+        }
+        allSucceeded = (await handleTransferBatch(normalizedItems.value, background)) && allSucceeded
+      } else {
+        for (const item of normalizedItems.value) {
+          if (!background) {
+            // 如果是文件，计算MD5
+            const key = item.type === 'dir' ? 'filetransfer' : CryptoJS.MD5(item.path).toString()
+
+            // 开始监听进度
+            startLoadingProgress(key)
+          }
+          allSucceeded = (await handleTransfer(item, background)) && allSucceeded
+        }
+      }
+    }
+
+    // 日志整理
+    if (props.logids?.length) {
+      if (!background) {
+        // 为日志整理任务开启进度监听
+        startLoadingProgress('filetransfer')
+      }
+      allSucceeded = (await handleTransferLogs(props.logids, background)) && allSucceeded
+    }
+
+    if (allSucceeded && !submissionResults.value.length) emit('done')
+  } finally {
+    if (!background) stopLoadingProgress()
+    progressDialog.value = false
+    transferSubmitting.value = false
+    await nextTick()
+    submissionResultsElement.value?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' })
+  }
+}
+
+onMounted(async () => {
+  await Promise.all([loadDirectories(), loadManualTransferHistory(), loadTargetPathMatch()])
+  loadStorages()
+  loadEpisodeFormatRuleConfiguration()
+})
+
+onUnmounted(() => {
+  targetPathMatchRequestId += 1
+  stopLoadingProgress()
+  if (episodeGroupQueryTimer) clearTimeout(episodeGroupQueryTimer)
+})
+</script>
+
+<template>
+  <VDialog
+    :scrollable="!previewVisible || !display.mdAndUp.value"
+    :max-width="dialogMaxWidth"
+    :fullscreen="!display.mdAndUp.value"
+  >
+    <VCard
+      class="reorganize-dialog-card"
+      :class="{ 'reorganize-dialog-card--split': previewVisible && display.mdAndUp.value }"
+    >
+      <VCardItem class="py-2 reorganize-dialog-card__header">
+        <template #prepend> <VIcon icon="mdi-folder-move" class="me-2" /> </template>
+        <VCardTitle>{{ dialogTitle }}</VCardTitle>
+        <VCardSubtitle>{{ dialogSubtitle }}</VCardSubtitle>
+      </VCardItem>
+      <VDialogCloseBtn @click="emit('close')" />
+      <VDivider />
+      <VCardText class="pa-0 reorganize-dialog-card__body">
+        <div class="reorganize-main-row" :class="{ 'reorganize-main-row--preview-visible': previewVisible }">
+          <div class="reorganize-form-pane">
+            <div class="reorganize-form-pane__content pa-6">
+              <VForm @submit.prevent="() => {}">
+                <VAlert
+                  v-if="manualHistoryCount > 0"
+                  :type="skipSuccessfulRecords ? 'info' : 'warning'"
+                  variant="tonal"
+                  density="compact"
+                  icon="mdi-history"
+                  class="mb-4"
+                >
+                  {{
+                    t(skipSuccessfulRecords ? 'dialog.reorganize.historySkipped' : 'dialog.reorganize.historyFound', {
+                      count: manualHistoryCount,
+                    })
+                  }}
+                  <VSwitch
+                    v-model="skipSuccessfulRecords"
+                    :label="t('dialog.reorganize.skipSuccessfulRecords')"
+                    :disabled="previewLoading || transferSubmitting || hasAcceptedSubmission"
+                    color="primary"
+                    density="compact"
+                    hide-details
+                    class="mt-2"
+                  />
+                </VAlert>
+                <VRow>
+                  <VCol cols="12" md="6">
+                    <VSelect
+                      v-model="transferForm.target_storage"
+                      :items="storageOptions"
+                      :label="t('dialog.reorganize.targetStorage')"
+                      :placeholder="t('dialog.reorganize.targetPathPlaceholder')"
+                      :hint="t('dialog.reorganize.targetStorageHint')"
+                      persistent-hint
+                      prepend-inner-icon="mdi-harddisk"
+                    />
+                  </VCol>
+                  <VCol cols="12" md="6">
+                    <VSelect
+                      v-model="transferForm.transfer_type"
+                      :label="t('dialog.reorganize.transferType')"
+                      :items="manualTransferTypeOptions"
+                      :hint="t('dialog.reorganize.transferTypeHint')"
+                      persistent-hint
+                      prepend-inner-icon="mdi-swap-horizontal"
+                    />
+                  </VCol>
+                  <VCol cols="12">
+                    <VCombobox
+                      v-model="targetPathSelection"
+                      :items="targetDirectoryOptions"
+                      item-title="title"
+                      item-value="value"
+                      :return-object="false"
+                      :label="t('dialog.reorganize.targetPath')"
+                      :placeholder="t('dialog.reorganize.targetPathPlaceholder')"
+                      :hint="t('dialog.reorganize.targetPathHint')"
+                      persistent-hint
+                      prepend-inner-icon="mdi-folder-outline"
+                    />
+                    <VAlert
+                      v-if="isAutomaticTargetPath"
+                      class="target-path-match mt-3"
+                      :type="targetPathMatchFailed ? 'warning' : 'info'"
+                      variant="tonal"
+                      density="compact"
+                      :icon="false"
+                    >
+                      <div class="target-path-match__content">
+                        <div class="target-path-match__message">
+                          <VProgressCircular
+                            v-if="targetPathMatchLoading"
+                            color="info"
+                            indeterminate
+                            size="18"
+                            width="2"
+                          />
+                          <VIcon
+                            v-else
+                            :icon="targetPathMatchFailed ? 'mdi-alert-outline' : 'mdi-source-branch-check'"
+                            size="20"
+                          />
+                          <span v-if="targetPathMatchLoading">{{ t('dialog.reorganize.targetPathMatchLoading') }}</span>
+                          <span v-else-if="targetPathMatchFailed">{{
+                            t('dialog.reorganize.targetPathMatchFailed')
+                          }}</span>
+                          <span v-else-if="targetPathMatch?.target_path">
+                            {{
+                              t('dialog.reorganize.targetPathMatchSuccess', {
+                                storage: matchedTargetStorageLabel,
+                                path: targetPathMatch.target_path,
+                              })
+                            }}
+                          </span>
+                          <span v-else>{{ t('dialog.reorganize.targetPathMatchEmpty') }}</span>
+                        </div>
+                        <VBtn
+                          v-if="targetPathMatch?.target_path && !targetPathMatchLoading"
+                          color="info"
+                          variant="text"
+                          size="small"
+                          prepend-icon="mdi-check"
+                          @click="applyTargetPathMatch"
+                        >
+                          {{ t('dialog.reorganize.useMatchedTargetPath') }}
+                        </VBtn>
+                      </div>
+                    </VAlert>
+                  </VCol>
+                </VRow>
+                <VRow>
+                  <VCol cols="12" :md="6">
+                    <VSelect
+                      v-model="transferForm.type_name"
+                      :label="t('dialog.reorganize.mediaType')"
+                      :items="[
+                        { title: t('dialog.reorganize.auto'), value: '' },
+                        { title: t('dialog.reorganize.movie'), value: '电影' },
+                        { title: t('dialog.reorganize.tv'), value: '电视剧' },
+                        { title: t('mediaType.music'), value: '音乐' },
+                      ]"
+                      :hint="t('dialog.reorganize.mediaTypeHint')"
+                      persistent-hint
+                      prepend-inner-icon="mdi-movie-open"
+                    />
+                  </VCol>
+                  <VCol cols="12" :md="6">
+                    <VSelect
+                      v-model="transferForm.media_source"
+                      :items="mediaSourceItems"
+                      :label="t('dialog.reorganize.mediaSource')"
+                      :hint="t('dialog.reorganize.mediaSourceHint')"
+                      persistent-hint
+                      prepend-inner-icon="mdi-database-search"
+                    />
+                  </VCol>
+                  <VCol v-if="transferForm.type_name === '音乐'" cols="12" md="6">
+                    <VSelect
+                      v-model="transferForm.music_type"
+                      :label="t('dialog.reorganize.musicEntity')"
+                      :items="[
+                        { title: t('music.entityRecording'), value: 'recording' },
+                        { title: t('music.entityAlbum'), value: 'album' },
+                        { title: t('dialog.reorganize.artistCollection'), value: 'artist_collection' },
+                      ]"
+                      :hint="t('dialog.reorganize.musicEntityHint')"
+                      persistent-hint
+                      prepend-inner-icon="mdi-music-box-multiple"
+                    />
+                  </VCol>
+                  <VCol
+                    v-if="transferForm.type_name !== '' && !isArtistCollectionMode"
+                    :cols="transferForm.type_name === '音乐' ? 6 : 12"
+                  >
+                    <VTextField
+                      v-model="transferForm.media_id"
+                      :label="mediaIdLabel"
+                      :placeholder="t('dialog.reorganize.mediaIdPlaceholder')"
+                      :rules="[validateMediaId]"
+                      append-inner-icon="mdi-magnify"
+                      :hint="t('dialog.reorganize.mediaIdHint')"
+                      persistent-hint
+                      prepend-inner-icon="mdi-identifier"
+                      @click:append-inner="mediaSelectorDialog = true"
+                    />
+                  </VCol>
+                </VRow>
+                <VAlert
+                  v-if="isArtistCollectionMode"
+                  type="info"
+                  variant="tonal"
+                  density="compact"
+                  icon="mdi-account-music"
+                  class="mb-4"
+                >
+                  {{ t('dialog.reorganize.artistCollectionHint') }}
+                </VAlert>
+                <VRow v-if="transferForm.type_name === '音乐'">
+                  <VCol cols="12">
+                    <VSwitch
+                      v-model="customMusicReleasePreference"
+                      :label="t('dialog.reorganize.musicReleasePreferenceOverride')"
+                      :hint="t('dialog.reorganize.musicReleasePreferenceOverrideHint')"
+                      persistent-hint
+                    />
+                  </VCol>
+                  <VCol cols="12" md="6">
+                    <VSelect
+                      v-model="transferForm.music_release_regions"
+                      :disabled="!customMusicReleasePreference"
+                      :items="musicReleaseRegionItems"
+                      :label="t('dialog.reorganize.musicReleaseRegions')"
+                      :hint="t('dialog.reorganize.musicReleaseRegionsHint')"
+                      multiple
+                      chips
+                      closable-chips
+                      persistent-hint
+                      prepend-inner-icon="mdi-earth"
+                      @update:model-value="
+                        (value: string[]) => (transferForm.music_release_regions = value.slice(0, 3))
+                      "
+                    />
+                  </VCol>
+                  <VCol cols="12" md="6">
+                    <VSelect
+                      v-model="transferForm.music_release_scripts"
+                      :disabled="!customMusicReleasePreference"
+                      :items="musicReleaseScriptItems"
+                      :label="t('dialog.reorganize.musicReleaseScripts')"
+                      :hint="t('dialog.reorganize.musicReleaseScriptsHint')"
+                      multiple
+                      chips
+                      closable-chips
+                      persistent-hint
+                      prepend-inner-icon="mdi-translate"
+                      @update:model-value="
+                        (value: string[]) => (transferForm.music_release_scripts = value.slice(0, 3))
+                      "
+                    />
+                  </VCol>
+                </VRow>
+                <VRow v-show="transferForm.type_name === '电视剧'">
+                  <VCol v-if="mediaSource === 'themoviedb'" cols="12" md="6">
+                    <VSelect
+                      v-model="transferForm.episode_group"
+                      :items="episodeGroupOptions"
+                      item-title="title"
+                      item-value="value"
+                      :item-props="episodeGroupItemProps"
+                      :loading="episodeGroupLoading"
+                      :disabled="!transferForm.media_id"
+                      clearable
+                      :label="t('dialog.reorganize.episodeGroup')"
+                      :placeholder="t('dialog.reorganize.episodeGroupPlaceholder')"
+                      :hint="t('dialog.reorganize.episodeGroupHint')"
+                      persistent-hint
+                      prepend-inner-icon="mdi-view-list"
+                    />
+                  </VCol>
+                  <VCol cols="12" md="3">
+                    <VSelect
+                      v-model.number="transferForm.season"
+                      :label="t('dialog.reorganize.season')"
+                      :items="seasonItems"
+                      :hint="t('dialog.reorganize.seasonHint')"
+                      persistent-hint
+                      prepend-inner-icon="mdi-calendar"
+                    />
+                  </VCol>
+                  <VCol cols="12" md="3">
+                    <VTextField
+                      v-model="transferForm.episode_detail"
+                      :disabled="disableEpisodeDetail"
+                      :label="t('dialog.reorganize.episodeDetail')"
+                      :placeholder="t('dialog.reorganize.episodeDetailPlaceholder')"
+                      :hint="t('dialog.reorganize.episodeDetailHint')"
+                      persistent-hint
+                      prepend-inner-icon="mdi-playlist-play"
+                    />
+                  </VCol>
+                  <VCol cols="12" md="6">
+                    <VTextField
+                      v-model="transferForm.episode_format"
+                      :label="t('dialog.reorganize.episodeFormat')"
+                      :placeholder="t('dialog.reorganize.episodeFormatPlaceholder')"
+                      :hint="t('dialog.reorganize.episodeFormatHint')"
+                      persistent-hint
+                      prepend-inner-icon="mdi-format-text"
+                    >
+                      <template #append-inner>
+                        <VTooltip location="top">
+                          <template #activator="{ props: tooltipProps }">
+                            <IconBtn
+                              v-bind="tooltipProps"
+                              type="button"
+                              color="primary"
+                              variant="text"
+                              size="small"
+                              class="ms-1"
+                              icon="mdi-auto-fix"
+                              :loading="episodeFormatRecommendState.loading"
+                              :disabled="!canRecommendEpisodeFormat"
+                              @click.stop="handleRecommendEpisodeFormat"
+                            />
+                          </template>
+                          <span>
+                            {{ episodeFormatRecommendTooltip }}
+                          </span>
+                        </VTooltip>
+                      </template>
+                    </VTextField>
+                  </VCol>
+                  <VCol cols="12" md="6">
+                    <VTextField
+                      v-model="transferForm.episode_offset"
+                      :label="t('dialog.reorganize.episodeOffset')"
+                      :placeholder="t('dialog.reorganize.episodeOffsetPlaceholder')"
+                      :hint="t('dialog.reorganize.episodeOffsetHint')"
+                      persistent-hint
+                      prepend-inner-icon="mdi-numeric"
+                    />
+                  </VCol>
+                </VRow>
+                <VRow>
+                  <VCol cols="12" md="6">
+                    <VTextField
+                      v-model="transferForm.episode_part"
+                      :label="t('dialog.reorganize.episodePart')"
+                      :placeholder="t('dialog.reorganize.episodePartPlaceholder')"
+                      :hint="t('dialog.reorganize.episodePartHint')"
+                      persistent-hint
+                      prepend-inner-icon="mdi-file-multiple"
+                    />
+                  </VCol>
+                  <VCol cols="12" md="6">
+                    <VTextField
+                      v-model.number="transferForm.min_filesize"
+                      :label="t('dialog.reorganize.minFileSize')"
+                      :rules="[numberValidator]"
+                      placeholder="0"
+                      :hint="t('dialog.reorganize.minFileSizeHint')"
+                      persistent-hint
+                      prepend-inner-icon="mdi-file-document-outline"
+                    />
+                  </VCol>
+                </VRow>
+                <VRow>
+                  <VCol cols="12" md="6">
+                    <VSwitch
+                      v-model="transferForm.library_type_folder"
+                      :label="t('dialog.reorganize.typeFolderOption')"
+                      :hint="t('dialog.reorganize.typeFolderHint')"
+                      persistent-hint
+                    />
+                  </VCol>
+                  <VCol cols="12" md="6">
+                    <VSwitch
+                      v-model="transferForm.library_category_folder"
+                      :label="t('dialog.reorganize.categoryFolderOption')"
+                      :hint="t('dialog.reorganize.categoryFolderHint')"
+                      persistent-hint
+                    />
+                  </VCol>
+                  <VCol cols="12" md="6">
+                    <VSwitch
+                      v-model="transferForm.scrape"
+                      :label="t('dialog.reorganize.scrapeOption')"
+                      :hint="t('dialog.reorganize.scrapeHint')"
+                      persistent-hint
+                    />
+                  </VCol>
+                  <VCol cols="12" md="6" v-if="props.logids?.length">
+                    <VSwitch
+                      v-model="transferForm.from_history"
+                      :label="t('dialog.reorganize.fromHistoryOption')"
+                      :hint="t('dialog.reorganize.fromHistoryHint')"
+                      persistent-hint
+                    />
+                  </VCol>
+                </VRow>
+              </VForm>
+              <section
+                v-if="submissionResults.length"
+                ref="submissionResultsElement"
+                class="submission-results"
+                aria-live="polite"
+              >
+                <h3>{{ t('transferRecovery.batchTitle') }}</h3>
+                <VAlert type="info" variant="tonal">{{ t('transferRecovery.batchHint') }}</VAlert>
+                <VBtn variant="tonal" class="justify-self-start" @click="openSubmissionQueue">
+                  {{ t('transferRecovery.queue') }}
+                </VBtn>
+                <div v-for="(item, index) in submissionResults" :key="index" class="submission-results__item">
+                  <VChip :color="getSubmissionColor(item)" size="small">
+                    {{ t(`transferRecovery.states.${getSubmissionState(item)}`) }}
+                  </VChip>
+                  <div>{{ t('transferRecovery.source') }} {{ item.source || '-' }}</div>
+                  <div>
+                    {{ t('transferRecovery.target') }}
+                    {{ item.target || item.target_dir || t('transferRecovery.targetUnknown') }}
+                  </div>
+                  <div v-if="item.failure_stage">
+                    {{ t('transferRecovery.stage') }} {{ getSubmissionStage(item.failure_stage) }}
+                  </div>
+                  <div v-if="item.message">{{ item.message }}</div>
+                  <div v-if="item.recovery_action">{{ t('transferRecovery.next') }} {{ item.recovery_action }}</div>
+                </div>
+              </section>
+            </div>
+            <VCardActions class="app-dialog-actions reorganize-form-pane__actions">
+              <VBtn
+                color="info"
+                variant="tonal"
+                @click="togglePreview"
+                :prepend-icon="previewToggleIcon"
+                class="reorganize-action-btn reorganize-action-btn--preview"
+                :class="{ 'reorganize-action-btn--active': previewVisible }"
+                :loading="previewLoading"
+              >
+                {{ t('dialog.reorganize.previewResult') }}
+              </VBtn>
+              <VBtn
+                color="success"
+                variant="tonal"
+                @click="transfer(true)"
+                prepend-icon="mdi-plus"
+                class="reorganize-action-btn reorganize-action-btn--queue"
+                :loading="transferSubmitting"
+                :disabled="previewLoading || transferSubmitting || hasAcceptedSubmission || hasTargetEditErrors"
+              >
+                {{ t('dialog.reorganize.addToQueue') }}
+              </VBtn>
+              <VSpacer />
+              <VBtn
+                color="primary"
+                variant="flat"
+                @click="transfer(false)"
+                :prepend-icon="isReorganize ? 'mdi-refresh' : 'mdi-arrow-right-bold'"
+                class="reorganize-action-btn reorganize-action-btn--primary"
+                :loading="manualHistoryLoading || transferSubmitting"
+                :disabled="previewLoading || transferSubmitting || hasAcceptedSubmission || hasTargetEditErrors"
+              >
+                {{ isReorganize ? t('dialog.reorganize.reorganizeAgain') : t('dialog.reorganize.reorganizeNow') }}
+              </VBtn>
+            </VCardActions>
+          </div>
+          <div v-show="previewVisible" class="reorganize-preview-pane">
+            <div class="reorganize-preview-pane__header">
+              <div class="reorganize-preview-pane__title-block">
+                <div class="reorganize-preview-pane__title-row">
+                  <div class="text-h6">{{ t('dialog.reorganize.previewTitle') }}</div>
+                  <div v-if="previewLoaded" class="preview-title-stats">
+                    <VChip color="primary" variant="tonal" size="small">
+                      {{ t('dialog.reorganize.previewTotal', { count: previewSummary.total }) }}
+                    </VChip>
+                    <VChip color="success" variant="tonal" size="small">
+                      {{ t('dialog.reorganize.previewSuccess', { count: previewSummary.success }) }}
+                    </VChip>
+                    <VChip color="error" variant="tonal" size="small">
+                      {{ t('dialog.reorganize.previewFailed', { count: previewSummary.failed }) }}
+                    </VChip>
+                  </div>
+                </div>
+                <div class="text-body-2 text-medium-emphasis mt-2">
+                  {{ t('dialog.reorganize.previewSubtitle') }}
+                </div>
+              </div>
+            </div>
+            <div class="reorganize-preview-pane__body">
+              <div v-if="previewLoading" class="reorganize-preview-pane__loading">
+                <VProgressCircular indeterminate color="info" />
+                <div class="text-body-2 text-medium-emphasis mt-3">{{ t('dialog.reorganize.previewLoading') }}</div>
+              </div>
+              <template v-else-if="previewLoaded">
+                <div class="reorganize-preview-pane__scroll">
+                  <div class="reorganize-preview-pane__summary">
+                    <div v-if="previewData?.message" class="preview-note">
+                      {{ previewData.message }}
+                    </div>
+                    <div class="preview-summary-grid">
+                      <div class="preview-overview-card">
+                        <span class="preview-overview-card__label">{{ t('dialog.reorganize.previewMediaName') }}</span>
+                        <span class="preview-overview-card__value">{{ previewMediaInfo.title }}</span>
+                      </div>
+                      <div class="preview-overview-card">
+                        <span class="preview-overview-card__label">{{ t('dialog.reorganize.previewMediaType') }}</span>
+                        <span class="preview-overview-card__value">{{ previewMediaInfo.type }}</span>
+                      </div>
+                      <div v-if="!previewIsMovie && !isArtistCollectionMode" class="preview-overview-card">
+                        <span class="preview-overview-card__label">{{
+                          t('dialog.reorganize.previewSeasonLabel')
+                        }}</span>
+                        <span class="preview-overview-card__value">{{ previewSeasonText }}</span>
+                      </div>
+                      <div v-if="!previewIsMovie && !isArtistCollectionMode" class="preview-overview-card">
+                        <span class="preview-overview-card__label">{{
+                          t('dialog.reorganize.previewEpisodeCount')
+                        }}</span>
+                        <span class="preview-overview-card__value">{{ previewEpisodeCountText }}</span>
+                      </div>
+                      <div v-if="isArtistCollectionMode" class="preview-overview-card">
+                        <span class="preview-overview-card__label">{{
+                          t('dialog.reorganize.artistCollectionGroupCount')
+                        }}</span>
+                        <span class="preview-overview-card__value">{{ artistCollectionPreviewGroups.length }}</span>
+                      </div>
+                    </div>
+                    <div v-if="previewRecognitionDetails.length" class="preview-custom-words">
+                      <div class="preview-custom-words__title">
+                        <VIcon icon="mdi-tag-text-outline" size="16" />
+                        <span>{{ previewRecognitionDetailTitle }}</span>
+                      </div>
+                      <div class="preview-custom-words__items">
+                        <div
+                          v-for="(detail, index) in previewRecognitionDetails"
+                          :key="`${detail.sourceName}-${index}`"
+                          class="preview-custom-words__item"
+                        >
+                          <div class="preview-custom-words__source">{{ detail.sourceName }}</div>
+                          <div v-if="detail.orgString" class="preview-custom-words__original">
+                            {{ detail.orgString }}
+                          </div>
+                          <div v-if="detail.applyWords.length" class="preview-custom-words__chips">
+                            <VChip
+                              v-for="(word, wordIndex) in detail.applyWords"
+                              :key="`${word}-${wordIndex}`"
+                              variant="outlined"
+                              color="info"
+                              size="small"
+                              class="preview-custom-words__chip"
+                            >
+                              {{ word }}
+                            </VChip>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="reorganize-preview-list">
+                    <VExpansionPanels
+                      v-if="isArtistCollectionMode && artistCollectionPreviewGroups.length"
+                      multiple
+                      variant="accordion"
+                      class="artist-collection-groups"
+                    >
+                      <VExpansionPanel
+                        v-for="group in artistCollectionPreviewGroups"
+                        :key="group.name"
+                        class="artist-collection-group"
+                      >
+                        <VExpansionPanelTitle>
+                          <div class="artist-collection-group__title">
+                            <VIcon :icon="group.entity === 'album' ? 'mdi-album' : 'mdi-music-note'" size="20" />
+                            <span>{{ group.name }}</span>
+                            <VChip size="x-small" variant="tonal">
+                              {{ t('dialog.reorganize.artistCollectionTrackCount', { count: group.items.length }) }}
+                            </VChip>
+                          </div>
+                        </VExpansionPanelTitle>
+                        <VExpansionPanelText>
+                          <div class="preview-file-body">
+                            <div
+                              v-for="(item, index) in group.items"
+                              :key="`${item.source}-${item.target}-${index}`"
+                              class="preview-file-row app-surface-shape"
+                              :class="{ 'preview-file-row--failed': item.success === false }"
+                            >
+                              <div class="preview-file-row__card preview-file-row__card--source">
+                                <span class="preview-file-row__label">{{
+                                  t('dialog.reorganize.previewBeforeColumn')
+                                }}</span>
+                                <span class="preview-file-row__name">{{ item.sourceName }}</span>
+                                <span class="preview-file-row__path">{{ item.source || '-' }}</span>
+                              </div>
+                              <div class="preview-file-row__arrow">
+                                <VIcon icon="mdi-arrow-right" size="18" />
+                              </div>
+                              <div class="preview-file-row__card preview-file-row__card--target">
+                                <span class="preview-file-row__label">{{
+                                  t('dialog.reorganize.previewAfterColumn')
+                                }}</span>
+                                <span class="preview-file-row__name">{{ getFileName(editedTarget(item)) }}</span>
+                                <template v-if="canEditTarget(item)">
+                                  <VTextarea
+                                    :model-value="editedTarget(item)"
+                                    @update:model-value="updateTarget(item, $event)"
+                                    label="整理后的完整路径"
+                                    hint="可修改目标目录和文件名；提交时校验并使用此路径"
+                                    persistent-hint
+                                    auto-grow
+                                    rows="2"
+                                    density="compact"
+                                    variant="outlined"
+                                    :error-messages="targetEditErrors[item.source || ''] || []"
+                                    :disabled="transferSubmitting || hasAcceptedSubmission"
+                                    class="w-100 mt-2"
+                                  />
+                                  <VBtn v-if="Object.hasOwn(targetEdits, item.source || '')" size="small" variant="text"
+                                    :disabled="transferSubmitting || hasAcceptedSubmission" @click="restoreTarget(item)">
+                                    恢复默认路径
+                                  </VBtn>
+                                </template>
+                                <span v-else class="preview-file-row__path">{{ item.target || '-' }}</span>
+                                <span
+                                  v-if="
+                                    (item.success === false || item.overwrite_skipped) && getPreviewFailureHint(item)
+                                  "
+                                  class="preview-file-row__message"
+                                >
+                                  {{ getPreviewFailureHint(item) }}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </VExpansionPanelText>
+                      </VExpansionPanel>
+                    </VExpansionPanels>
+                    <div v-else-if="pagedPreviewRows.length" class="preview-file-body">
+                      <div
+                        v-for="(item, index) in pagedPreviewRows"
+                        :key="`${item.source}-${item.target}-${index}`"
+                        class="preview-file-row app-surface-shape"
+                        :class="{ 'preview-file-row--failed': item.success === false }"
+                      >
+                        <div class="preview-file-row__card preview-file-row__card--source">
+                          <span class="preview-file-row__label">{{ t('dialog.reorganize.previewBeforeColumn') }}</span>
+                          <span class="preview-file-row__name">{{ item.sourceName }}</span>
+                          <span class="preview-file-row__path">{{ item.source || '-' }}</span>
+                        </div>
+                        <div class="preview-file-row__arrow">
+                          <VIcon icon="mdi-arrow-right" size="18" />
+                        </div>
+                        <div class="preview-file-row__card preview-file-row__card--target">
+                          <span class="preview-file-row__label">{{ t('dialog.reorganize.previewAfterColumn') }}</span>
+                          <span class="preview-file-row__name">{{ getFileName(editedTarget(item)) }}</span>
+                          <template v-if="canEditTarget(item)">
+                            <VTextarea
+                              :model-value="editedTarget(item)"
+                              @update:model-value="updateTarget(item, $event)"
+                              label="整理后的完整路径"
+                              hint="可修改目标目录和文件名；提交时校验并使用此路径"
+                              persistent-hint
+                              auto-grow
+                              rows="2"
+                              density="compact"
+                              variant="outlined"
+                              :error-messages="targetEditErrors[item.source || ''] || []"
+                              :disabled="transferSubmitting || hasAcceptedSubmission"
+                              class="w-100 mt-2"
+                            />
+                            <VBtn v-if="Object.hasOwn(targetEdits, item.source || '')" size="small" variant="text"
+                              :disabled="transferSubmitting || hasAcceptedSubmission" @click="restoreTarget(item)">
+                              恢复默认路径
+                            </VBtn>
+                          </template>
+                          <span v-else class="preview-file-row__path">{{ item.target || '-' }}</span>
+                          <span
+                            v-if="(item.success === false || item.overwrite_skipped) && getPreviewFailureHint(item)"
+                            class="preview-file-row__message"
+                          >
+                            {{ getPreviewFailureHint(item) }}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div v-else class="reorganize-preview-list__empty">
+                      {{ t('dialog.reorganize.noPreviewData') }}
+                    </div>
+                  </div>
+                  <div
+                    v-if="!isArtistCollectionMode && previewTotalPages > 1"
+                    class="reorganize-preview-pane__pagination"
+                  >
+                    <VBtn
+                      size="x-small"
+                      icon="mdi-chevron-left"
+                      variant="text"
+                      :disabled="previewPage <= 1"
+                      @click="previewPage--"
+                    />
+                    <span class="text-caption">{{ previewPage }} / {{ previewTotalPages }}</span>
+                    <VBtn
+                      size="x-small"
+                      icon="mdi-chevron-right"
+                      variant="text"
+                      :disabled="previewPage >= previewTotalPages"
+                      @click="previewPage++"
+                    />
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </VCardText>
+    </VCard>
+    <!-- 手动整理进度框 -->
+    <ProgressDialog v-if="progressDialog" v-model="progressDialog" :text="progressText" :value="progressValue" />
+    <!-- 媒体数据源ID搜索框 -->
+    <VDialog v-model="mediaSelectorDialog" width="40rem" scrollable max-height="85vh">
+      <MediaIdSelector
+        v-model="transferForm.media_id"
+        @close="mediaSelectorDialog = false"
+        @select="handleMediaSelected"
+        :type="mediaSource"
+        :music-types="
+          transferForm.type_name === '音乐'
+            ? [
+                transferForm.music_type === 'artist_collection'
+                  ? 'album'
+                  : transferForm.music_type || defaultMusicEntity,
+              ]
+            : undefined
+        "
+        :initial-keyword="transferForm.type_name === '音乐' ? mediaSearchHint : undefined"
+      />
+    </VDialog>
+  </VDialog>
+</template>
+
+<style lang="scss" scoped>
+.reorganize-dialog-card {
+  max-block-size: min(92vh, 64rem);
+}
+
+.reorganize-dialog-card__header {
+  padding-inline-end: 4rem !important;
+}
+
+.reorganize-dialog-card__body {
+  min-block-size: 0;
+}
+
+.artist-collection-groups {
+  gap: 0.65rem;
+}
+
+.artist-collection-group {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 0.75rem !important;
+}
+
+.artist-collection-group__title {
+  display: flex;
+  min-inline-size: 0;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.reorganize-dialog-card--split {
+  display: flex;
+  flex-direction: column;
+  block-size: min(92vh, 64rem);
+}
+
+.reorganize-dialog-card--split .reorganize-dialog-card__body {
+  display: flex;
+  overflow: hidden;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.reorganize-dialog-card--split .reorganize-main-row {
+  flex: 1 1 auto;
+  block-size: 100%;
+}
+
+.reorganize-main-row {
+  display: grid;
+  overflow: hidden;
+  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr);
+  inline-size: 100%;
+  min-block-size: 0;
+  transition: grid-template-columns 0.25s ease;
+}
+
+.reorganize-main-row--preview-visible {
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+}
+
+.reorganize-form-pane {
+  display: flex;
+  overflow: hidden;
+  flex-direction: column;
+  max-inline-size: none;
+  min-block-size: 0;
+  min-inline-size: 0;
+}
+
+.reorganize-main-row--preview-visible .reorganize-form-pane {
+  border-inline-end: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.reorganize-form-pane__content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-block-size: 0;
+}
+
+.reorganize-dialog-card--split .reorganize-form-pane,
+.reorganize-dialog-card--split .reorganize-preview-pane {
+  block-size: 100%;
+}
+
+.reorganize-dialog-card--split .reorganize-form-pane__content {
+  overflow: auto;
+}
+
+.reorganize-form-pane__actions {
+  margin-block-start: auto;
+}
+
+.submission-results {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 1rem;
+  min-inline-size: 0;
+  margin-block-start: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.submission-results__item {
+  display: grid;
+  justify-items: start;
+  gap: 0.375rem;
+  border-block-start: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  padding-block-start: 1rem;
+  min-inline-size: 0;
+  white-space: pre-wrap;
+}
+
+.reorganize-action-btn--active {
+  background: rgba(var(--v-theme-info), 0.12);
+}
+
+.target-path-match {
+  border-radius: var(--app-control-radius);
+}
+
+.target-path-match__content,
+.target-path-match__message {
+  display: flex;
+  align-items: center;
+  min-inline-size: 0;
+}
+
+.target-path-match__content {
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.target-path-match__message {
+  gap: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.reorganize-preview-pane {
+  display: flex;
+  overflow: hidden;
+  flex-direction: column;
+  min-block-size: 0;
+  min-inline-size: 0;
+}
+
+.reorganize-preview-pane__header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  border-block-end: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  gap: 1rem;
+  padding-block: 1.5rem 1rem;
+  padding-inline: 1.5rem;
+}
+
+.reorganize-preview-pane__title-block {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+}
+
+.reorganize-preview-pane__title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+}
+
+.reorganize-preview-pane__body {
+  display: flex;
+  overflow: hidden;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-block-size: 0;
+}
+
+.preview-title-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+
+.reorganize-preview-pane__summary {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 0.875rem;
+  padding-block-start: 1.25rem;
+  padding-inline: 1.5rem;
+}
+
+.preview-note {
+  color: rgb(var(--v-theme-error));
+  font-size: 0.875rem;
+  line-height: 1.5;
+  padding-block: 0.875rem;
+  padding-inline: 1rem;
+}
+
+.preview-summary-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.preview-overview-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 0.5rem;
+  gap: 0.375rem;
+  min-inline-size: 0;
+  padding-block: 0.875rem;
+  padding-inline: 1rem;
+}
+
+.preview-overview-card__label {
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+  font-size: 0.75rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.preview-overview-card__value {
+  overflow: hidden;
+  color: rgb(var(--v-theme-on-surface));
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-custom-words {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 0.5rem;
+  gap: 0.75rem;
+  padding-block: 0.875rem;
+  padding-inline: 1rem;
+}
+
+.preview-custom-words__title {
+  display: inline-flex;
+  align-items: center;
+  color: rgb(var(--v-theme-info));
+  font-size: 0.875rem;
+  font-weight: 600;
+  gap: 0.375rem;
+}
+
+.preview-custom-words__items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-inline-size: 0;
+}
+
+.preview-custom-words__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-inline-size: 0;
+}
+
+.preview-custom-words__source {
+  color: rgb(var(--v-theme-on-surface));
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.preview-custom-words__original {
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+  font-size: 0.75rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.preview-custom-words__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  min-inline-size: 0;
+}
+
+.preview-custom-words__chip {
+  block-size: auto !important;
+  max-inline-size: 100%;
+  min-block-size: 1.5rem;
+  padding-block: 0.25rem;
+  white-space: normal;
+  word-break: break-all;
+}
+
+.reorganize-preview-pane__scroll {
+  display: flex;
+  overflow: hidden auto;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1rem;
+  min-block-size: 0;
+  padding-block-end: 1rem;
+}
+
+.reorganize-preview-pane__pagination {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  padding-block: 0 1rem;
+  padding-inline: 1rem;
+}
+
+.reorganize-preview-pane__loading {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-block: 2rem;
+  padding-inline: 1.5rem;
+  text-align: center;
+}
+
+.reorganize-preview-list {
+  display: flex;
+  overflow: visible;
+  flex: 0 0 auto;
+  flex-direction: column;
+  margin-block-end: 1.5rem;
+  min-block-size: 0;
+  min-inline-size: 0;
+  padding-inline: 1.5rem;
+}
+
+.preview-file-body {
+  display: flex;
+  overflow: visible;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-block-size: 0;
+  min-inline-size: 0;
+}
+
+.preview-file-row {
+  display: grid;
+  align-items: center;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 0.5rem;
+  gap: 0.875rem;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  min-block-size: 5.25rem;
+  min-inline-size: 0;
+  padding-block: 0.875rem;
+  padding-inline: 1rem;
+}
+
+.preview-file-row--failed {
+  background: rgba(var(--v-theme-error), 0.04);
+}
+
+.preview-file-row__card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-inline-size: 0;
+}
+
+.preview-file-row__label {
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.preview-file-row__name {
+  overflow: hidden;
+  color: rgb(var(--v-theme-on-surface));
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-file-row__path {
+  overflow: visible;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  word-break: break-all;
+}
+
+.preview-file-row__card--target .preview-file-row__name {
+  color: rgb(var(--v-theme-primary));
+}
+
+.preview-file-row--failed .preview-file-row__card--target .preview-file-row__name {
+  color: rgb(var(--v-theme-error));
+}
+
+.preview-file-row__message {
+  color: rgb(var(--v-theme-error));
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.preview-file-row__arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  block-size: 2rem;
+  color: rgb(var(--v-theme-info));
+  inline-size: 2rem;
+}
+
+.reorganize-preview-list__empty {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+  padding-block: 2rem;
+  padding-inline: 1rem;
+  text-align: center;
+}
+
+@media (width <= 1200px) {
+  .reorganize-preview-pane__header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .preview-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .preview-file-row {
+    grid-template-columns: 1fr;
+  }
+
+  .preview-file-row__arrow {
+    justify-self: start;
+    transform: rotate(90deg);
+  }
+}
+
+@media (width <= 959px) {
+  .reorganize-dialog-card,
+  .reorganize-dialog-card--split {
+    block-size: auto;
+    max-block-size: none;
+  }
+
+  .reorganize-dialog-card--split .reorganize-dialog-card__body,
+  .reorganize-dialog-card--split .reorganize-form-pane__content {
+    overflow: visible;
+  }
+
+  .reorganize-main-row,
+  .reorganize-main-row--preview-visible {
+    grid-template-columns: 1fr;
+  }
+
+  .reorganize-main-row--preview-visible .reorganize-form-pane {
+    border-block-end: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-inline-end: none;
+  }
+
+  .reorganize-action-btn {
+    min-block-size: 2.75rem;
+    padding-inline: 1rem;
+  }
+
+  .reorganize-preview-pane__summary {
+    padding-inline: 1rem;
+  }
+
+  .reorganize-preview-list {
+    margin-block-end: 1rem;
+    padding-inline: 1rem;
+  }
+}
+
+@media (width <= 640px) {
+  .target-path-match__content {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .target-path-match__content .v-btn {
+    inline-size: 100%;
+  }
+
+  .reorganize-form-pane__actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .reorganize-action-btn--primary {
+    grid-column: 1 / -1;
+  }
+
+  .reorganize-preview-pane__header {
+    padding-inline: 1rem;
+  }
+
+  .preview-file-body {
+    padding-inline: 0.75rem;
+  }
+
+  .preview-file-row {
+    padding-inline: 0.875rem;
+  }
+}
+
+@media (width <= 420px) {
+  .reorganize-form-pane__actions {
+    gap: 0.5rem;
+  }
+
+  .reorganize-action-btn {
+    font-size: 0.875rem;
+  }
+}
+</style>

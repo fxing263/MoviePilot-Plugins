@@ -264,3 +264,11 @@ BDMV扫描改为五段Cron，旧HH:MM等价迁移，进度轮询仍一分钟。�
 - `npm run build --prefix local-plugins/plugins.v2/rapid115upload/frontend`：成功。
 
 新增覆盖：另存为持久化及重复事件不丢关联、路径越界/过期确认/目录覆盖拒绝、重试取消撤销删除授权、远端变化及删除超时禁止重发、删除后重启恢复、本地身份变化、同目标并发保护、仅成功上传清理本地，以及前端确认快照/错误保留弹窗。宿主全量、架构快照及真实115覆盖操作未执行；原生媒体记录前端未修改。
+
+## 2026-10-13 1.2.7 BDMV做种时长
+
+仅插件BDMV配置、准入筛选和前端字段变更，不创建Trellis任务。使用qB torrents_info的seeding_time秒数，不新增网络查询；未达标时在文件清单请求前跳过。等待任务提交前复核，已提交任务继续核对和打标签。
+
+沿用1.2.6记载的七文件pytest命令：355 passed。新增阈值前/等于/超过、缺失及非法秒数、等待任务阈值变更后恢复、已提交任务不受影响、配置校验和前端保存默认值覆盖。首次测试发现测试替身修改了原配置但worker持有深拷贝，修正测试配置注入及默认值断言后全通过。
+
+`uv run --locked --no-sync pylint --reports=n` 对bdmv.py、bdmv_rules.py、test_rapid115upload_bdmv.py、test_rapid115upload_frontend.py：10/10；`npm run build --prefix local-plugins/plugins.v2/rapid115upload/frontend` 成功。全部离线，不执行真实qB/CD2上传；未运行宿主全量及架构基线（宿主代码、依赖和导入合同未改）。

@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Callable, Iterator, Optional
 
 from .bdmv_cd2 import BdmvCd2ConflictError, BdmvCd2Error
-from .bdmv_rules import mapped_paths, torrent_identity
+from .bdmv_rules import mapped_paths, seeding_eligible, torrent_identity
 from .torrents import _qb_module
 
 
@@ -143,6 +143,8 @@ class BdmvWorker:
                     return
                 if not {"BDMV", "未整理"}.issubset(_tags(row)) or "已上传" in _tags(row):
                     continue
+                if not seeding_eligible(row, self.config):
+                    continue
                 try:
                     identity = torrent_identity(module, downloader, row, client.qbc.torrents_files(torrent_hash=row["hash"]))
                     source, target = mapped_paths(identity, self.config["mappings"])
@@ -180,6 +182,9 @@ class BdmvWorker:
             if task["state"] == "tagging":
                 self._tag(task, module, qbc, row)
             elif task["state"] == "waiting":
+                if not seeding_eligible(row, self.config):
+                    task["error"] = "等待做种时间超过配置阈值（或qB尚未返回有效做种时长）"
+                    return
                 active = sum(item.get("status") not in {3, 4} for item in tasks)
                 uncertain = sum(item["state"] in {"submitting", "unknown"} for item in data["tasks"].values())
                 if active + uncertain >= 2:

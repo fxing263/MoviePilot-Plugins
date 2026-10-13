@@ -9,7 +9,7 @@ from pathlib import Path, PurePosixPath
 from apscheduler.triggers.cron import CronTrigger
 
 BDMV_DEFAULTS = {"enabled": False, "cron": "0 2 * * *", "downloaders": [],
-                 "cd2_plugin_id": "CloudDriveDisk", "mappings": []}
+                 "cd2_plugin_id": "CloudDriveDisk", "mappings": [], "min_seeding_hours": 0}
 
 
 def absolute_path(value: str) -> PurePosixPath:
@@ -30,6 +30,8 @@ def validate_bdmv(value: dict) -> dict:
     result.update({key: copy.deepcopy(value[key]) for key in result if key in value})
     if not isinstance(result["enabled"], bool):
         raise ValueError("BDMV 开关必须为布尔值")
+    if type(result["min_seeding_hours"]) is not int or result["min_seeding_hours"] < 0:
+        raise ValueError("BDMV 做种时间须为非负整数小时，0 表示不限制")
     # 旧版每日时间转换为等价 Cron，重载后不改变原计划。
     if "cron" not in value and "time" in value:
         legacy = value["time"]
@@ -65,6 +67,15 @@ def validate_bdmv(value: dict) -> dict:
     if result["enabled"] and not (result["downloaders"] and result["mappings"]):
         raise ValueError("启用 BDMV 前须选择下载器并配置路径映射")
     return result
+
+
+def seeding_eligible(torrent: dict, config: dict) -> bool:
+    """qB seeding_time 为累计做种秒数；严格大于阈值才准入，缺失不以完成时间推算。"""
+    hours = config.get("min_seeding_hours", 0)
+    if hours == 0:
+        return True
+    seconds = torrent.get("seeding_time")
+    return type(seconds) is int and seconds > hours * 3600
 
 
 def torrent_identity(module: object, downloader: str, torrent: dict, files: list) -> dict:

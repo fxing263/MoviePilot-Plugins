@@ -7,7 +7,7 @@ function normalizeConfig(response = {}) {
   const config = JSON.parse(JSON.stringify(source || {}));
   const normalizeMappings = rows => Array.isArray(rows)
     ? rows.map(mapping => ({ ...mapping, initial_delay_minutes: mapping.initial_delay_minutes ?? 0, max_attempts: mapping.max_attempts ?? config.max_attempts ?? 3 })) : [];
-  const bdmv = { enabled: false, downloaders: [], cd2_plugin_id: 'CloudDriveDisk', mappings: [], ...(config.bdmv || {}) };
+  const bdmv = { enabled: false, min_seeding_hours: 0, downloaders: [], cd2_plugin_id: 'CloudDriveDisk', mappings: [], ...(config.bdmv || {}) };
   if (bdmv.cron == null) {
     const legacy = /^(\d{2}):(\d{2})$/.exec(bdmv.time || '02:00');
     bdmv.cron = legacy ? `${Number(legacy[2])} ${Number(legacy[1])} * * *` : '';

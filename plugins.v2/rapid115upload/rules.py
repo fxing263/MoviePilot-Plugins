@@ -4,8 +4,9 @@ import copy
 from pathlib import Path, PurePosixPath
 
 from .bdmv_rules import BDMV_DEFAULTS, validate_bdmv
+from .postprocess.rules import DEFAULTS as POST_DEFAULTS, validate_config as validate_postprocess
 
-DEFAULTS = {"bdmv": BDMV_DEFAULTS, "enabled": False, "mappings": [], "watch_mappings": [],
+DEFAULTS = {"bdmv": BDMV_DEFAULTS, "postprocess": POST_DEFAULTS, "enabled": False, "mappings": [], "watch_mappings": [],
             "concurrency": 2, "qb_enabled": False, "delete_after_upload": False,
             "remove_empty_parents": False,
             "downloaders": [], "include_tags": ["未整理"], "exclude_tags": ["已整理", "BDMV"]}
@@ -25,6 +26,7 @@ def validate_config(config: dict) -> dict:
             or not isinstance(result["watch_mappings"], list)):
         raise ValueError("启用开关必须是布尔值，目录映射必须是列表")
     result["bdmv"] = validate_bdmv(result["bdmv"])
+    result["postprocess"] = validate_postprocess(result["postprocess"])
     if result["enabled"] and not (result["mappings"] or result["qb_enabled"] or result["bdmv"]["enabled"]):
         raise ValueError("启用前至少配置整理目录映射、qB标签监控或BDMV上传")
     if not isinstance(result["delete_after_upload"], bool):

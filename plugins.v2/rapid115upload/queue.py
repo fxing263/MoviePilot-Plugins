@@ -12,6 +12,8 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Callable, Iterator, Optional
 
+from .postprocess.rules import plan
+
 
 class FileChangedError(ValueError):
     """本地整理文件的身份变化，需人工检查后重新登记。"""
@@ -142,6 +144,24 @@ class UploadQueue:
         with self._locked() as snapshot:
             task = snapshot["tasks"][task_id]
             task.update(changes)
+            self._save(snapshot)
+            return copy.deepcopy(task)
+
+    def complete(self, task_id: str, receipt: dict, config: dict) -> dict:
+        """上传成功及冻结的后处理意图同一快照落盘；不扫描或回放旧成功任务。"""
+        with self._locked() as snapshot:
+            task = snapshot["tasks"][task_id]
+            if task["state"] == "uploaded":
+                return copy.deepcopy(task)
+            now = self.clock()
+            try:
+                postprocess = plan(task, config, now)
+            except Exception:
+                # 规划异常也必须保留成功事实，不能因可选功能重新上传媒体。
+                postprocess = {"mode": config.get("mode", "off"), "state": "failed", "attempts": 0,
+                               "error": "后处理配置规划失败，请检查设置后手动补处理", "created_at": now}
+            task.update(state="uploaded", receipt=receipt, verification={}, metadata_failures=0,
+                        uploaded_at=now, ready_at=None, error="", postprocess=postprocess)
             self._save(snapshot)
             return copy.deepcopy(task)
 

@@ -13,7 +13,8 @@ export function normalizeConfig(response = {}) {
     bdmv.cron = legacy ? `${Number(legacy[2])} ${Number(legacy[1])} * * *` : ''
   }
   delete bdmv.time
-  return { bdmv, remove_empty_parents: config.remove_empty_parents ?? false, delete_after_upload: config.delete_after_upload ?? false, concurrency: config.concurrency ?? 2, qb_enabled: config.qb_enabled ?? false, downloaders: config.downloaders ?? [], include_tags: config.include_tags ?? ['未整理'], exclude_tags: config.exclude_tags ?? ['已整理', 'BDMV'], watch_mappings: normalizeMappings(config.watch_mappings), enabled: config.enabled ?? false, mappings: normalizeMappings(config.mappings) }
+  const postprocess = { mode: 'off', mappings: [], cd2_plugin_id: 'CloudDriveDisk', merge_delay: 45, max_wait: 180, min_interval: 3, retry_base: 60, retry_max: 3600, ...(config.postprocess || {}) }
+  return { postprocess, bdmv, remove_empty_parents: config.remove_empty_parents ?? false, delete_after_upload: config.delete_after_upload ?? false, concurrency: config.concurrency ?? 2, qb_enabled: config.qb_enabled ?? false, downloaders: config.downloaders ?? [], include_tags: config.include_tags ?? ['未整理'], exclude_tags: config.exclude_tags ?? ['已整理', 'BDMV'], watch_mappings: normalizeMappings(config.watch_mappings), enabled: config.enabled ?? false, mappings: normalizeMappings(config.mappings) }
 }
 
 /** 后端明确验证通过后才交给宿主持久化。 */
@@ -53,4 +54,14 @@ export function qbOptions(response) {
   if (!Array.isArray(rows)) throw new Error('下载器清单返回格式无效')
   return [...new Set(rows.filter(row => row.type === 'qbittorrent' && row.name).map(row => row.name))]
     .map(name => ({ title: name, value: name }))
+}
+
+export const POSTPROCESS_LABELS = { pending: '待执行', running: '执行中', done: '成功', retry: '失败 / 待重试', failed: '失败', conflict: '内容冲突', skipped: '已跳过', disabled: '关闭' }
+
+/** 已登记任务使用冻结配置重试；仅没有后处理记录的历史任务可按当前配置补处理。 */
+export function postprocessAction(task) {
+  if (task?.state !== 'uploaded') return ''
+  const post = task.postprocess
+  if (!post || post.state === 'disabled' || (post.state === 'failed' && post.attempts === 0 && !post.target)) return 'post_enqueue'
+  return post.target && ['retry', 'failed', 'conflict'].includes(post.state) ? 'post_retry' : ''
 }

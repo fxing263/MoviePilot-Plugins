@@ -4,7 +4,6 @@ import copy
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 import threading
-import time
 from typing import Optional
 
 from fastapi import Body, Depends, HTTPException
@@ -22,6 +21,7 @@ from .client import RapidClient, RemoteConflictError, RemoteMetadataError, Retry
 from .queue import FileChangedError, UploadQueue
 from .normal import upload
 from .progress import UploadProgress
+from .postprocess.worker import PostWorker
 from .torrents import reconcile
 from .rules import DEFAULTS, validate_config
 from .directories import local_library_roots, validate_library_roots
@@ -51,7 +51,7 @@ class Rapid115Upload(_PluginBase):
     plugin_name = "媒体整理增强"
     plugin_desc = "接入MP整理，秒传重试后普通上传，整种子上传后回写qB标签。"
     plugin_icon = "mdi-cloud-upload-outline"
-    plugin_version = "1.2.7"
+    plugin_version = "1.2.8"
     plugin_author = "MoviePilot local"
     author_url = "https://github.com/jxxghp/MoviePilot"
     plugin_config_prefix = "rapid115upload_"
@@ -70,6 +70,7 @@ class Rapid115Upload(_PluginBase):
         self._error = ""
         self._hook = None
         self._bdmv = None
+        self._postprocess = None
 
     def init_plugin(self, config: Optional[dict] = None) -> None:
         """停止旧消费者后加载配置；错误时保持关闭并保留队列原件。"""
@@ -81,6 +82,7 @@ class Rapid115Upload(_PluginBase):
                 self._queue.tasks()
                 self._bdmv = BdmvWorker(self.get_data_path(), self._config["bdmv"], self._stop)
                 self._bdmv.queue.snapshot()
+                self._postprocess = PostWorker(self._queue, self._config["postprocess"], self._stop)
             except (OSError, ValueError, TypeError) as error:
                 self._error = str(error)
                 logger.error(f"115仅秒传未启用：{error}")
@@ -133,6 +135,9 @@ class Rapid115Upload(_PluginBase):
             return []
         services = [{"id": "Rapid115UploadTick", "name": "115仅秒传队列", "trigger": "interval",
                  "func": self.process_tasks, "kwargs": {"seconds": 15}}]
+        if self._postprocess and self._config["postprocess"]["mode"] != "off":
+            services.append({"id": "Rapid115Postprocess", "name": "115上传后处理", "trigger": "interval",
+                             "func": self._postprocess.tick, "kwargs": {"seconds": 5}})
         if self._bdmv and self._config["bdmv"]["enabled"]:
             minute, hour, day, month, weekday = self._config["bdmv"]["cron"].split()
             services.extend([
@@ -151,6 +156,8 @@ class Rapid115Upload(_PluginBase):
             self._enabled = False
         if self._bdmv is not None:
             self._bdmv.close()
+        if self._postprocess is not None:
+            self._postprocess.close()
         with self._execution:
             if self._hook is not None:
                 self._hook.stop()
@@ -252,6 +259,7 @@ class Rapid115Upload(_PluginBase):
 
     def _run_task(self, task: dict) -> None:
         client = None
+        succeeded = False
         report = lambda stage, completed=0, total=0: self._progress.update(task["id"], stage, completed, total)
         report("hashing")
         try:
@@ -273,10 +281,7 @@ class Rapid115Upload(_PluginBase):
             if result is None:
                 self._queue.defer(task, "未命中秒传，已停止本次尝试，等待下次重试")
             else:
-                self._queue.update(task["id"], state="uploaded", receipt=result, verification={}, metadata_failures=0,
-                                   uploaded_at=time.time(), ready_at=None, error="")
-                self._remove_uploaded_file(task)
-                logger.info(f"115上传成功：{task['organized_path']} → {task['remote_path']}")
+                succeeded = True
             self._error = ""
         except RemoteConflictError as error:
             self._queue.update(task["id"], state="blocked", error=str(error), verification=error.diagnostic)
@@ -300,7 +305,18 @@ class Rapid115Upload(_PluginBase):
         finally:
             self._progress.remove(task["id"])
             if client is not None:
-                client.close()
+                try:
+                    client.close()
+                except Exception:
+                    logger.warning("115上传会话关闭失败，保留已确认的上传结果")
+        if succeeded:
+            # 成功落盘和后处理独立于上传的异常重试边界。
+            try:
+                task = self._queue.complete(task["id"], result, self._config["postprocess"])
+                self._remove_uploaded_file(task)
+                logger.info(f"115上传成功：{task['organized_path']} → {task['remote_path']}")
+            except Exception as error:
+                logger.error(f"上传成功后的本地操作失败（{type(error).__name__}），未重新排队上传")
 
     def _remove_uploaded_file(self, task: dict) -> None:
         """仅在成功状态落盘后按当前配置删除整理目标，失败不回滚上传或保存删除记录。"""
@@ -362,6 +378,7 @@ class Rapid115Upload(_PluginBase):
                 if task["state"] == "running":
                     task["progress"] = self._progress.snapshot(task["id"])
             return Response(success=True, data={"tasks": tasks,
+                                                "postprocess_stats": self._postprocess.store.stats() if self._postprocess else {},
                                                 "bdmv": self._bdmv.queue.snapshot() if self._bdmv else {"tasks": [], "error": ""},
                                                 "enabled": self._enabled, "error": self._error,
                                                 "mappings": [{"library_root": item["library_root"],
@@ -378,7 +395,12 @@ class Rapid115Upload(_PluginBase):
         try:
             if self._queue is None or not isinstance(payload.get("task_id"), str):
                 raise ValueError("任务不存在")
-            self._queue.action(payload["task_id"], payload.get("action"), payload)
+            if payload.get("action") in {"post_retry", "post_enqueue"}:
+                if self._postprocess is None:
+                    raise ValueError("后处理未初始化，请检查配置")
+                self._postprocess.store.action(payload["task_id"], payload["action"], self._config["postprocess"])
+            else:
+                self._queue.action(payload["task_id"], payload.get("action"), payload)
             return Response(success=True)
         except (OSError, ValueError, TypeError) as error:
             return Response(success=False, message=str(error))

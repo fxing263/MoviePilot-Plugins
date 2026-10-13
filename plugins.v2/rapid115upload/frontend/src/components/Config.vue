@@ -7,6 +7,7 @@
     <v-tabs v-model="tab" color="primary" density="compact" class="config-tabs" grow>
       <v-tab value="general">基本设置</v-tab>
       <v-tab value="mappings">目录映射 · {{ config.mappings.length }}</v-tab>
+      <v-tab value="postprocess">上传后处理</v-tab>
       <v-tab value="qb">qB 标签</v-tab><v-tab value="bdmv">BDMV 上传</v-tab>
     </v-tabs>
     <v-progress-linear v-if="loading" indeterminate />
@@ -25,8 +26,8 @@
           </div>
         </div>
         <div class="config-field">
-          <label class="field-label" for="rapid-after-upload">上传完成后处理</label>
-          <v-select id="rapid-after-upload" v-model="afterUpload" :items="[{ title: '保留硬链接文件', value: 'keep' }, { title: '删除硬链接文件', value: 'delete' }, { title: '删除硬链接文件及空的父文件夹', value: 'delete_empty' }]" aria-label="上传完成后处理" variant="outlined" density="compact" hide-details />
+          <label class="field-label" for="rapid-after-upload">上传后本地文件处理</label>
+          <v-select id="rapid-after-upload" v-model="afterUpload" :items="[{ title: '保留硬链接文件', value: 'keep' }, { title: '删除硬链接文件', value: 'delete' }, { title: '删除硬链接文件及空的父文件夹', value: 'delete_empty' }]" aria-label="上传后本地文件处理" variant="outlined" density="compact" hide-details />
           <p class="field-help">仅在115上传成功后删除。清理空父文件夹时遇到非空目录即停止，保留整理根目录。</p>
         </div>
         <div class="config-note">先在 MP 存储设置中授权115。停用插件会暂停队列。</div>
@@ -110,6 +111,44 @@
         <div class="config-note">未整理 → 已整理 → 已上传<br />MP确认已整理后移除未整理；整个种子全部选中文件上传完成后添加已上传。普通下载列表、按Hash查询及其他类型下载器不受选择限制。使用前请停用独立的qB标签监控插件。</div>
       </section>
 
+      <section v-show="tab === 'postprocess'" aria-label="上传后处理设置" class="config-panel">
+        <div class="config-field">
+          <div class="field-label">上传成功后的处理方式</div>
+          <v-radio-group v-model="config.postprocess.mode" aria-label="上传成功后的处理方式" hide-details>
+            <v-radio label="关闭" value="off" />
+            <v-radio label="本地生成 STRM" value="strm" />
+            <v-radio label="定向刷新 CD2（由 Symedia 生成 STRM）" value="cd2" />
+          </v-radio-group>
+          <p class="field-help">两种模式互斥，仅在上传确认成功后执行，不影响上传成功状态与本地文件清理。</p>
+        </div>
+        <template v-if="config.postprocess.mode !== 'off'">
+          <div class="mapping-toolbar">
+            <v-select v-if="config.postprocess.mappings.length" v-model="postMappingIndex" :items="postMappingOptions" aria-label="选择上传后处理映射" variant="outlined" density="compact" hide-details class="mapping-select" />
+            <span v-else class="field-help">尚未配置上传后处理映射</span>
+            <v-btn size="small" variant="tonal" color="primary" @click="addPostMapping">添加映射</v-btn>
+          </div>
+          <template v-if="postMapping">
+            <div v-for="field in postFields" :key="field.key" class="config-field">
+              <label class="field-label" :for="`post-${field.key}`">{{ field.title }}</label>
+              <v-text-field :id="`post-${field.key}`" v-model="postMapping[field.key]" :aria-label="field.title" :placeholder="field.example" variant="outlined" density="compact" hide-details />
+              <p class="field-help">{{ field.help }}</p>
+            </div>
+            <v-btn color="error" variant="text" size="small" class="align-self-end" @click="removePostMapping">删除此映射</v-btn>
+          </template>
+          <p class="field-help">按115源目录边界匹配，优先使用最长前缀。不扫描历史任务；需要时可在已上传任务详情中主动补处理。</p>
+        </template>
+        <div v-if="config.postprocess.mode === 'strm'" class="config-note">按最终115文件路径生成 STRM，保留目录结构和播放路径中的视频扩展名。相同内容跳过，不覆盖不同内容；仅处理媒体文件，不处理 BDMV 内的分片。本模式不刷新 CD2 缓存，不保证即时播放。</div>
+        <template v-if="config.postprocess.mode === 'cd2'">
+          <div class="config-field">
+            <label class="field-label" for="post-plugin">CloudDrive2储存插件 ID</label>
+            <v-text-field id="post-plugin" v-model="config.postprocess.cd2_plugin_id" aria-label="后处理CloudDrive2插件ID" variant="outlined" density="compact" hide-details />
+            <p class="field-help">默认 CloudDriveDisk，复用已运行插件的连接；无需另外填写账号密码。</p>
+          </div>
+          <div class="config-note">后台合并同目录的刷新任务，由已有 Symedia 监控生成 STRM。不扫描整个媒体库，不直接通知 Symedia。</div>
+        </template>
+        <div class="config-note">登记时固定模式与映射，后续配置修改只影响新登记任务。关闭会暂停已有后处理；重新启用后，已有任务继续按原模式与映射执行。升级不会自动补处理历史上传记录。</div>
+      </section>
+
       <section v-show="tab === 'bdmv'" aria-label="BDMV上传设置" class="config-panel">
         <div class="switch-row"><div><strong>BDMV 整目录上传</strong><p>定时扫描已完成且同时带有 BDMV、未整理标签的种子</p></div><v-switch v-model="config.bdmv.enabled" aria-label="启用BDMV上传" color="primary" hide-details /></div>
         <div class="field-grid">
@@ -181,6 +220,26 @@ async function loadDirectories() {
   }
 }
 const tab = ref('general')
+const postMappingIndex = ref(0)
+const postMapping = computed(() => config.postprocess.mappings[postMappingIndex.value])
+const postMappingOptions = computed(() => config.postprocess.mappings.map((item, index) => ({ title: `${index + 1}. ${item.source_root || '新目录映射'}`, value: index })))
+const postFields = computed(() => [
+  { key: 'source_root', title: '115源根目录', example: '/影视库', help: '115网盘内路径，不含 CD2 盘名或系统挂载点。' },
+  ...(config.postprocess.mode === 'strm' ? [
+    { key: 'strm_root', title: '本地 STRM 输出根目录', example: '/media/strm', help: 'MoviePilot 容器可写的本地目录。' },
+    { key: 'playback_root', title: 'STRM 内容根目录（挂载播放路径）', example: '/CloudNAS/CloudDrive/115open/影视库', help: '写入 STRM 的原始绝对路径，须是播放器可访问的挂载路径。' },
+  ] : [
+    { key: 'cd2_root', title: 'CD2 API 目标根目录', example: '/115open/影视库', help: 'CD2 文件列表中的路径，不是 /CloudNAS 系统挂载路径。' },
+  ]),
+])
+function addPostMapping() {
+  config.postprocess.mappings.push({ source_root: '', strm_root: '', playback_root: '', cd2_root: '' })
+  postMappingIndex.value = config.postprocess.mappings.length - 1
+}
+function removePostMapping() {
+  config.postprocess.mappings.splice(postMappingIndex.value, 1)
+  postMappingIndex.value = Math.max(0, postMappingIndex.value - 1)
+}
 const bdmvMappingIndex = ref(0)
 const bdmvMapping = computed(() => config.bdmv.mappings[bdmvMappingIndex.value])
 const bdmvMappingOptions = computed(() => config.bdmv.mappings.map((item, index) => ({ title: `${index + 1}. ${item.local_root || '新目录映射'}`, value: index })))

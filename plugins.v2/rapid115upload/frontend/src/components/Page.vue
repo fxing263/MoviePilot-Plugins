@@ -9,6 +9,7 @@
         <div class="text-h5 font-weight-bold mt-1">{{ tasks.length }}</div>
         <div class="text-caption text-medium-emphasis">已上传 {{ uploadedCount }} / {{ tasks.length }} 个 · {{ formatSize(uploadedBytes) }} / {{ formatSize(totalBytes) }}</div>
         <div class="d-flex flex-wrap ga-2 mt-2"><v-chip v-for="item in summary" :key="item.state" size="small" variant="tonal" :color="stateColor(item.state)">{{ item.label }} {{ item.count }}</v-chip></div>
+        <div v-if="postStats && postStats.rpc_calls" class="text-caption text-medium-emphasis mt-2">CD2 刷新 RPC {{ postStats.rpc_calls }} 次 · 合并目录 {{ postStats.merged_directories || 0 }} 个 · 重试 {{ postStats.retries || 0 }} 次<br />RPC 次数不是115 API请求次数。</div>
       </v-card-text>
     </v-card>
     <v-card variant="outlined" class="queue-card mx-4">
@@ -31,6 +32,7 @@
         <template #item.size="{ item }"><span class="text-no-wrap">{{ formatSize(item.identity?.[2]) }}</span></template>
         <template #item.ready="{ item }"><small>{{ formatTime(item.ready_at) }}</small></template>
         <template #item.state="{ item }"><v-chip size="small" :color="stateColor(item.state)" variant="tonal">{{ STATE_LABELS[item.state] || item.state }}</v-chip><small v-if="item.upload_mode === 'normal'" class="ml-2">普通上传</small></template>
+        <template #item.postprocess="{ item }"><small v-if="item.postprocess">{{ POSTPROCESS_LABELS[item.postprocess.state] || item.postprocess.state }}</small><span v-else class="text-medium-emphasis">—</span></template>
         <template #item.progress="{ item }">
           <div v-if="item.state === 'running'" class="task-progress py-2">
             <div class="text-caption">{{ stageLabel(item.progress?.stage) }}</div>
@@ -73,7 +75,19 @@
           <div><strong>尝试次数：</strong>{{ selectedTask.attempts }}</div>
           <div v-if="selectedTask.verification?.remote_bytes != null"><strong>大小校验：</strong>本地 {{ selectedTask.verification.local_bytes }} 字节 / 115 {{ selectedTask.verification.remote_bytes }} 字节</div>
           <div v-if="selectedTask.error" class="text-medium-emphasis"><strong>说明：</strong>{{ selectedTask.error }}</div>
+          <template v-if="selectedTask.postprocess">
+            <v-divider class="my-3" />
+            <div><strong>上传后处理：</strong>{{ selectedTask.postprocess.mode === 'strm' ? '本地生成 STRM' : selectedTask.postprocess.mode === 'cd2' ? '定向刷新 CD2' : '关闭' }} · {{ POSTPROCESS_LABELS[selectedTask.postprocess.state] || selectedTask.postprocess.state }}</div>
+            <div v-if="selectedTask.postprocess.target"><strong>后处理目标：</strong>{{ selectedTask.postprocess.target }}</div>
+            <div><strong>后处理尝试：</strong>{{ selectedTask.postprocess.attempts || 0 }} 次 · 下次执行 {{ formatTime(selectedTask.postprocess.ready_at) }}</div>
+            <div v-if="selectedTask.postprocess.error" class="text-error">{{ selectedTask.postprocess.error }}</div>
+            <p class="text-caption text-medium-emphasis">使用登记时固定的模式与映射；后处理失败不会重新上传。当前配置关闭时，待处理任务暂停。</p>
+          </template>
+          <p v-if="postAction === 'post_enqueue'" class="text-caption text-medium-emphasis">此任务尚未执行后处理。手动补处理使用当前配置，只处理这一个任务，不重新上传。</p>
         </v-card-text>
+        <v-card-actions v-if="postAction">
+          <v-btn :disabled="acting || !enabled" color="primary" @click="act(postAction)">{{ postAction === 'post_retry' ? '重试后处理' : '按当前配置补处理' }}</v-btn>
+        </v-card-actions>
         <v-card-actions v-if="!['running', 'uploaded'].includes(selectedTask.state)" class="flex-wrap ga-1">
           <v-btn :disabled="acting" @click="act('retry')">重新校验 / 重试</v-btn>
           <v-btn v-if="hasConflict" :disabled="acting" @click="openResolution('rename')">另存为</v-btn>
@@ -108,13 +122,14 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { PLUGIN_ID, STATE_LABELS, formatTime } from './shared'
+import { PLUGIN_ID, STATE_LABELS, POSTPROCESS_LABELS, postprocessAction, formatTime } from './shared'
 const props = defineProps({ api: { type: [Object, Function], default: () => ({}) }, pluginId: { type: String, default: PLUGIN_ID }, navKey: { type: String, default: '' } })
 const emit = defineEmits(['switch', 'close'])
 const bdmv = ref({ tasks: [], error: '' })
 const bdmvLabels = { waiting: '等待上传', submitting: '正在提交', unknown: '等待CD2确认', copying: 'CD2上传中', tagging: '正在更新标签', done: '已上传', blocked: '需要处理' }
 const bdmvHeaders = [{ title: '种子 / 目标目录', key: 'name' }, { title: '状态', key: 'state' }, { title: '进度', key: 'progress', sortable: false }]
 const tasks = ref([])
+const postStats = ref(null)
 const loading = ref(false)
 const acting = ref(false)
 const enabled = ref(false)
@@ -130,6 +145,7 @@ const resolutionOpen = ref(false)
 const resolution = ref('')
 const resolutionTask = ref(null)
 const newFilename = ref('')
+const postAction = computed(() => postprocessAction(selectedTask.value))
 const hasConflict = computed(() => selectedTask.value?.state === 'blocked' && ['size_mismatch', 'directory'].includes(selectedTask.value?.verification?.reason))
 const hasSizeConflict = computed(() => hasConflict.value && selectedTask.value?.verification?.reason === 'size_mismatch')
 const headers = [
@@ -137,6 +153,7 @@ const headers = [
   { title: '大小', key: 'size', sortable: false, width: 110 },
   { title: '下次尝试', key: 'ready', sortable: false },
   { title: '状态', key: 'state', sortable: false },
+  { title: '上传后处理', key: 'postprocess', sortable: false },
   { title: '进度 / 速度', key: 'progress', sortable: false, width: 210 },
   { title: '', key: 'actions', sortable: false },
 ]
@@ -211,6 +228,7 @@ async function refresh() {
     const response = await props.api.get(`plugin/${props.pluginId || PLUGIN_ID}/tasks`)
     if (response?.success !== true) throw new Error(response?.message || '读取状态失败')
     tasks.value = response.data?.tasks || []
+    postStats.value = response.data?.postprocess_stats || null
     bdmv.value = response.data?.bdmv || { tasks: [], error: '' }
     if (page.value > pageCount.value) page.value = Math.max(1, pageCount.value)
     if (selectedTask.value) selectedTask.value = tasks.value.find(task => task.id === selectedTask.value.id) || null

@@ -272,3 +272,21 @@ BDMV扫描改为五段Cron，旧HH:MM等价迁移，进度轮询仍一分钟。�
 沿用1.2.6记载的七文件pytest命令：355 passed。新增阈值前/等于/超过、缺失及非法秒数、等待任务阈值变更后恢复、已提交任务不受影响、配置校验和前端保存默认值覆盖。首次测试发现测试替身修改了原配置但worker持有深拷贝，修正测试配置注入及默认值断言后全通过。
 
 `uv run --locked --no-sync pylint --reports=n` 对bdmv.py、bdmv_rules.py、test_rapid115upload_bdmv.py、test_rapid115upload_frontend.py：10/10；`npm run build --prefix local-plugins/plugins.v2/rapid115upload/frontend` 成功。全部离线，不执行真实qB/CD2上传；未运行宿主全量及架构基线（宿主代码、依赖和导入合同未改）。
+
+## 2026-10-13 1.2.8 上传后处理
+
+源码位于MoviePilot/local-plugins/plugins.v2/rapid115upload，同步维护到project/MoviePilot-Plugins；读取主仓AGENTS.md及对应架构、持久化、外部接口、测试规则。按用户要求不使用SSH部署；范围仅STRM/CD2刷新，不涉及刮削、Emby通知、Symedia设置或CD2双向备份。
+
+上传成功和冻结后处理计划使用原队列同一次原子JSON保存，后处理独立宿主调度、独立消费者文件锁；默认off且无历史回放。CD2复用原BDMV适配器连接，不改其行为。STRM仅本地原子不覆盖写入。新增postprocess包（rules/store/worker/strm/cd2）及后处理页面配置。
+
+验证命令在实际测试源码根 `/home/zhaojg/MoviePilot-upgrades/jxxghp-MoviePilot-09f62ff`：
+`uv run --locked --no-sync pytest tests/test_rapid115upload.py tests/test_rapid115upload_frontend.py tests/test_rapid115upload_reorganize.py tests/test_rapid115upload_reorganize_persistence.py tests/test_qbittorrent_tag_monitor.py tests/test_rapid115upload_bdmv.py tests/test_rapid115upload_bdmv_cd2.py tests/test_rapid115upload_postprocess.py tests/test_rapid115upload_strm.py tests/test_rapid115upload_refresh.py -q`。
+
+覆盖两条实际路径样本、最长前缀/边界/中文/多点文件名、穿越拒绝、STRM幂等/冲突/写失败与竞态、模式隔离、CD2流中断/超时/祖先发现/同批缓存/叶子重新刷新、目录合并最长等待、在途新事件、退避及崩溃恢复、普通/秒传成功后的失败不重传、本地清理异常不会改变成功、手工补处理、关闭和配置快照语义。均为模拟调用及临时目录，不通过批量真实云盘调用验证。
+
+结果：上述10文件pytest共419 passed；修改Python及4个后处理/前端测试文件pylint10/10；Vite生产构建通过。聚焦只读审查未发现同目录丢事件、上传回滚或历史自动回放问题。未运行宿主全量/架构快照（无宿主实现或依赖修改），未执行真实115/CD2/本地NAS写入。
+
+发布仓库已保存tests/v2/rapid115upload的独立回归。仓库旧tests/_bootstrap.py仍引用宿主已退役的app.testing.network_guard，默认测试入口在当前宿主收集失败；不改共享脚手架或伪报通过。提供本插件conftest复用实际宿主prepare_backend及app.testing.network，执行：
+`MOVIEPILOT_BACKEND_PATH=/path/to/MoviePilot /path/to/python -m pytest --confcutdir=tests/v2/rapid115upload tests/v2/rapid115upload -q`。
+
+插件仓上述定向入口：68 passed（新增后处理后端、CD2、STRM及前端配置测试）。仓库只新增本功能测试，原有宿主419项回归保留且仍通过；未迁移与本功能无关、依赖原始前端源码的旧测试。共享旧引导未改。

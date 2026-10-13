@@ -11,7 +11,7 @@ from .strm import StrmConflictError, write_strm
 
 
 class PostWorker:
-    """独立调度的单消费者；失败只重试后处理，不重新上传视频。"""
+    """独立调度的单消费者；后处理只执行一次，失败不重试或重新上传视频。"""
 
     def __init__(self, queue, config: dict, stop: threading.Event, writer: Callable = write_strm,
                  adapter_factory: Optional[Callable] = None) -> None:
@@ -72,6 +72,6 @@ class PostWorker:
         except Exception as error:
             from ..bdmv_cd2 import BdmvCd2Error
             message = (str(error) if isinstance(error, (BdmvCd2Error, InterruptedError))
-                       else f'后处理失败（{type(error).__name__}），等待重试')
+                       else f'后处理失败（{type(error).__name__}），不再重试')
             for task in tasks:
-                self.store.finish(task['id'], 'retry', message)
+                self.store.finish(task['id'], 'failed', message)

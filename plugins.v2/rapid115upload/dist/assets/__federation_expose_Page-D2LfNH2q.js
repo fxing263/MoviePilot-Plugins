@@ -1,5 +1,5 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
-import { P as PLUGIN_ID, p as postprocessAction, S as STATE_LABELS, a as POSTPROCESS_LABELS, f as formatTime } from './shared-Clnk7wT2.js';
+import { P as PLUGIN_ID, p as postprocessAction, S as STATE_LABELS, a as POSTPROCESS_LABELS, f as formatTime } from './shared-DMbgpPgW.js';
 import { _ as _export_sfc } from './_plugin-vue_export-helper-pcqpp-6-.js';
 
 const {createElementVNode:_createElementVNode,toDisplayString:_toDisplayString,createTextVNode:_createTextVNode,resolveComponent:_resolveComponent,withCtx:_withCtx,openBlock:_openBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode,createVNode:_createVNode,renderList:_renderList,Fragment:_Fragment,createElementBlock:_createElementBlock,unref:_unref} = await importShared('vue');
@@ -230,7 +230,7 @@ return (_ctx, _cache) => {
 
   return (__props.navKey)
     ? (_openBlock(), _createElementBlock("div", _hoisted_1, [
-        _cache[41] || (_cache[41] = _createElementVNode("div", { class: "d-flex align-center pa-4" }, [
+        _cache[42] || (_cache[42] = _createElementVNode("div", { class: "d-flex align-center pa-4" }, [
           _createElementVNode("div", { class: "text-h6" }, "115秒传")
         ], -1)),
         (error.value)
@@ -292,7 +292,7 @@ return (_ctx, _cache) => {
                 ]),
                 (postStats.value && postStats.value.rpc_calls)
                   ? (_openBlock(), _createElementBlock("div", _hoisted_6, [
-                      _createTextVNode("CD2 刷新 RPC " + _toDisplayString(postStats.value.rpc_calls) + " 次 · 合并目录 " + _toDisplayString(postStats.value.merged_directories || 0) + " 个 · 重试 " + _toDisplayString(postStats.value.retries || 0) + " 次", 1),
+                      _createTextVNode("CD2 刷新 RPC " + _toDisplayString(postStats.value.rpc_calls) + " 次 · 合并目录 " + _toDisplayString(postStats.value.merged_directories || 0) + " 个", 1),
                       _cache[17] || (_cache[17] = _createElementVNode("br", null, null, -1)),
                       _cache[18] || (_cache[18] = _createTextVNode("RPC 次数不是115 API请求次数。", -1))
                     ]))
@@ -641,9 +641,9 @@ return (_ctx, _cache) => {
                               color: "primary",
                               onClick: _cache[5] || (_cache[5] = $event => (act(postAction.value)))
                             }, {
-                              default: _withCtx(() => [
-                                _createTextVNode(_toDisplayString(postAction.value === 'post_retry' ? '重试后处理' : '按当前配置补处理'), 1)
-                              ]),
+                              default: _withCtx(() => [...(_cache[34] || (_cache[34] = [
+                                _createTextVNode("按当前配置补处理", -1)
+                              ]))]),
                               _: 1
                             }, 8, ["disabled"])
                           ]),
@@ -660,7 +660,7 @@ return (_ctx, _cache) => {
                               disabled: acting.value,
                               onClick: _cache[6] || (_cache[6] = $event => (act('retry')))
                             }, {
-                              default: _withCtx(() => [...(_cache[34] || (_cache[34] = [
+                              default: _withCtx(() => [...(_cache[35] || (_cache[35] = [
                                 _createTextVNode("重新校验 / 重试", -1)
                               ]))]),
                               _: 1
@@ -671,7 +671,7 @@ return (_ctx, _cache) => {
                                   disabled: acting.value,
                                   onClick: _cache[7] || (_cache[7] = $event => (openResolution('rename')))
                                 }, {
-                                  default: _withCtx(() => [...(_cache[35] || (_cache[35] = [
+                                  default: _withCtx(() => [...(_cache[36] || (_cache[36] = [
                                     _createTextVNode("另存为", -1)
                                   ]))]),
                                   _: 1
@@ -684,7 +684,7 @@ return (_ctx, _cache) => {
                                   color: "warning",
                                   onClick: _cache[8] || (_cache[8] = $event => (openResolution('overwrite')))
                                 }, {
-                                  default: _withCtx(() => [...(_cache[36] || (_cache[36] = [
+                                  default: _withCtx(() => [...(_cache[37] || (_cache[37] = [
                                     _createTextVNode("覆盖远端", -1)
                                   ]))]),
                                   _: 1
@@ -695,7 +695,7 @@ return (_ctx, _cache) => {
                               color: "error",
                               onClick: _cache[9] || (_cache[9] = $event => (act('cancel')))
                             }, {
-                              default: _withCtx(() => [...(_cache[37] || (_cache[37] = [
+                              default: _withCtx(() => [...(_cache[38] || (_cache[38] = [
                                 _createTextVNode("取消任务", -1)
                               ]))]),
                               _: 1
@@ -751,7 +751,7 @@ return (_ctx, _cache) => {
                             variant: "outlined",
                             "hide-details": ""
                           }, null, 8, ["modelValue"]),
-                          _cache[38] || (_cache[38] = _createElementVNode("div", { class: "text-caption mt-2" }, "仅修改此任务的115文件名，目录与本地文件不变。若新名称也已存在，会重新校验。", -1))
+                          _cache[39] || (_cache[39] = _createElementVNode("div", { class: "text-caption mt-2" }, "仅修改此任务的115文件名，目录与本地文件不变。若新名称也已存在，会重新校验。", -1))
                         ], 64))
                       : (_openBlock(), _createElementBlock(_Fragment, { key: 2 }, [
                           _createElementVNode("div", null, "本地 " + _toDisplayString(resolutionTask.value?.verification?.local_bytes) + " 字节 / 115 " + _toDisplayString(resolutionTask.value?.verification?.remote_bytes) + " 字节", 1),
@@ -760,7 +760,7 @@ return (_ctx, _cache) => {
                             variant: "tonal",
                             class: "mt-3"
                           }, {
-                            default: _withCtx(() => [...(_cache[39] || (_cache[39] = [
+                            default: _withCtx(() => [...(_cache[40] || (_cache[40] = [
                               _createTextVNode("将先删除上述115文件，再上传本地文件。上传失败时原文件不会自动恢复；只有上传成功才会执行本地清理及后续标签处理。", -1)
                             ]))]),
                             _: 1
@@ -776,7 +776,7 @@ return (_ctx, _cache) => {
                       disabled: acting.value,
                       onClick: _cache[12] || (_cache[12] = $event => (resolutionOpen.value = false))
                     }, {
-                      default: _withCtx(() => [...(_cache[40] || (_cache[40] = [
+                      default: _withCtx(() => [...(_cache[41] || (_cache[41] = [
                         _createTextVNode("返回", -1)
                       ]))]),
                       _: 1
@@ -806,6 +806,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-394dd903"]]);
+const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-28e83513"]]);
 
 export { Page as default };

@@ -9,7 +9,7 @@ from ..bdmv_cd2 import BdmvCd2Adapter, BdmvCd2Error
 
 
 class RefreshError(BdmvCd2Error):
-    """刷新尚未确认成功，调用方应保留目录并退避重试。"""
+    """刷新尚未确认成功，调用方记录失败结果。"""
 
 
 class RefreshAdapter(BdmvCd2Adapter):

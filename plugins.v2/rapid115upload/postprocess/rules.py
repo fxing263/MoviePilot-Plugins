@@ -6,8 +6,7 @@ import re
 from pathlib import PurePosixPath
 
 DEFAULTS = {"mode": "off", "mappings": [], "cd2_plugin_id": "CloudDriveDisk",
-            "merge_delay": 45, "max_wait": 180, "min_interval": 3,
-            "retry_base": 60, "retry_max": 3600}
+            "merge_delay": 45, "max_wait": 180, "min_interval": 3}
 MEDIA_EXTENSIONS = frozenset({".mkv", ".mp4", ".avi", ".mov", ".wmv", ".flv", ".ts",
                               ".m2ts", ".mts", ".mpg", ".mpeg", ".m4v", ".webm", ".vob"})
 
@@ -32,14 +31,14 @@ def validate_config(config: dict) -> dict:
     result.update({key: copy.deepcopy(config[key]) for key in result if key in config})
     if result["mode"] not in ("off", "strm", "cd2"):
         raise ValueError("上传后处理方式必须为关闭、本地 STRM 或 CD2 刷新之一")
-    for key in ("merge_delay", "max_wait", "min_interval", "retry_base", "retry_max"):
+    for key in ("merge_delay", "max_wait", "min_interval"):
         value = result[key]
         minimum = 0 if key == "merge_delay" else 1
         if (isinstance(value, bool) or not isinstance(value, (int, float))
                 or not math.isfinite(value) or not minimum <= value <= 86400):
             raise ValueError(f"后处理 {key} 必须为 {minimum} 至 86400 秒的有限数字")
-    if result["max_wait"] < result["merge_delay"] or result["retry_max"] < result["retry_base"]:
-        raise ValueError("最长等待不能小于合并延迟，最大重试间隔不能小于初始间隔")
+    if result["max_wait"] < result["merge_delay"]:
+        raise ValueError("最长等待不能小于合并延迟")
     if result["mode"] == "cd2" and (not isinstance(result["cd2_plugin_id"], str)
             or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", result["cd2_plugin_id"])):
         raise ValueError("CD2 插件 ID 无效")
@@ -67,7 +66,7 @@ def plan(task: dict, config: dict, now: float) -> dict:
     record = {"mode": config.get("mode", "off"), "state": "pending", "error": "",
               "attempts": 0, "created_at": now, "ready_at": now,
               "remote_path": task.get("remote_path", "")}
-    for key in ("merge_delay", "max_wait", "min_interval", "retry_base", "retry_max"):
+    for key in ("merge_delay", "max_wait", "min_interval"):
         record[key] = config.get(key, DEFAULTS[key])
     if record["mode"] == "off":
         record["state"] = "disabled"

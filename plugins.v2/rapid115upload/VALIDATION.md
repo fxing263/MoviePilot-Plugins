@@ -290,3 +290,8 @@ BDMV扫描改为五段Cron，旧HH:MM等价迁移，进度轮询仍一分钟。�
 `MOVIEPILOT_BACKEND_PATH=/path/to/MoviePilot /path/to/python -m pytest --confcutdir=tests/v2/rapid115upload tests/v2/rapid115upload -q`。
 
 插件仓上述定向入口：68 passed（新增后处理后端、CD2、STRM及前端配置测试）。仓库只新增本功能测试，原有宿主419项回归保留且仍通过；未迁移与本功能无关、依赖原始前端源码的旧测试。共享旧引导未改。
+
+
+## 2026-10-13 1.2.9
+
+用户明确要求后处理失败不重试，并要求不要进行测试。本次不运行pytest或pylint；仅更新源码、界面和生产构建。取消自动/手动后处理重试，旧retry/running转failed；保留pending首次执行和上传自身重试。旧版本测试通过记录不代表本版本通过。

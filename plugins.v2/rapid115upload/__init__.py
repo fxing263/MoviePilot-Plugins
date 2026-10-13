@@ -51,7 +51,7 @@ class Rapid115Upload(_PluginBase):
     plugin_name = "媒体整理增强"
     plugin_desc = "接入MP整理，秒传重试后普通上传，整种子上传后回写qB标签。"
     plugin_icon = "mdi-cloud-upload-outline"
-    plugin_version = "1.2.8"
+    plugin_version = "1.2.9"
     plugin_author = "MoviePilot local"
     author_url = "https://github.com/jxxghp/MoviePilot"
     plugin_config_prefix = "rapid115upload_"

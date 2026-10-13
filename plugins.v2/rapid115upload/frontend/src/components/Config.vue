@@ -119,7 +119,7 @@
             <v-radio label="本地生成 STRM" value="strm" />
             <v-radio label="定向刷新 CD2（由 Symedia 生成 STRM）" value="cd2" />
           </v-radio-group>
-          <p class="field-help">两种模式互斥，仅在上传确认成功后执行，不影响上传成功状态与本地文件清理。</p>
+          <p class="field-help">两种模式互斥，上传成功后只执行一次。失败仅记录结果，不重试，不影响上传成功状态与本地文件清理。</p>
         </div>
         <template v-if="config.postprocess.mode !== 'off'">
           <div class="mapping-toolbar">

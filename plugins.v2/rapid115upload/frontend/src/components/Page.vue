@@ -9,7 +9,7 @@
         <div class="text-h5 font-weight-bold mt-1">{{ tasks.length }}</div>
         <div class="text-caption text-medium-emphasis">已上传 {{ uploadedCount }} / {{ tasks.length }} 个 · {{ formatSize(uploadedBytes) }} / {{ formatSize(totalBytes) }}</div>
         <div class="d-flex flex-wrap ga-2 mt-2"><v-chip v-for="item in summary" :key="item.state" size="small" variant="tonal" :color="stateColor(item.state)">{{ item.label }} {{ item.count }}</v-chip></div>
-        <div v-if="postStats && postStats.rpc_calls" class="text-caption text-medium-emphasis mt-2">CD2 刷新 RPC {{ postStats.rpc_calls }} 次 · 合并目录 {{ postStats.merged_directories || 0 }} 个 · 重试 {{ postStats.retries || 0 }} 次<br />RPC 次数不是115 API请求次数。</div>
+        <div v-if="postStats && postStats.rpc_calls" class="text-caption text-medium-emphasis mt-2">CD2 刷新 RPC {{ postStats.rpc_calls }} 次 · 合并目录 {{ postStats.merged_directories || 0 }} 个<br />RPC 次数不是115 API请求次数。</div>
       </v-card-text>
     </v-card>
     <v-card variant="outlined" class="queue-card mx-4">
@@ -86,7 +86,7 @@
           <p v-if="postAction === 'post_enqueue'" class="text-caption text-medium-emphasis">此任务尚未执行后处理。手动补处理使用当前配置，只处理这一个任务，不重新上传。</p>
         </v-card-text>
         <v-card-actions v-if="postAction">
-          <v-btn :disabled="acting || !enabled" color="primary" @click="act(postAction)">{{ postAction === 'post_retry' ? '重试后处理' : '按当前配置补处理' }}</v-btn>
+          <v-btn :disabled="acting || !enabled" color="primary" @click="act(postAction)">按当前配置补处理</v-btn>
         </v-card-actions>
         <v-card-actions v-if="!['running', 'uploaded'].includes(selectedTask.state)" class="flex-wrap ga-1">
           <v-btn :disabled="acting" @click="act('retry')">重新校验 / 重试</v-btn>

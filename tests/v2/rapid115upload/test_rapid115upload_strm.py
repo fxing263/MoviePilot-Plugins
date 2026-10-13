@@ -71,8 +71,7 @@ def test_duplicate_and_inactive_settings(modules):
         rules.validate_config(value)
 
 
-@pytest.mark.parametrize("changes", [{"mode": "both"}, {"retry_base": 0}, {"retry_base": float("nan")},
-                                      {"retry_max": 86401}, {"retry_max": 2}, {"retry_base": True}, {"merge_delay": float("nan")}, {"max_wait": 1}, {"min_interval": 0}])
+@pytest.mark.parametrize("changes", [{"mode": "both"}, {"merge_delay": float("nan")}, {"max_wait": 1}, {"min_interval": 0}])
 def test_configuration_limits(modules, changes):
     with pytest.raises(ValueError):
         modules[0].validate_config(config(**changes))

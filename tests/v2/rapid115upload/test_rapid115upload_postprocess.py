@@ -63,41 +63,35 @@ def test_success_atomically_records_plan_without_side_effects(setup):
     assert task(setup, key)['postprocess']['state'] == 'done'
 
 
-def test_retry_backoff_persistence_and_manual_retry(setup):
+def test_failure_is_final_even_after_restart(setup):
     key = setup.enqueue()
     def fail(_):
         raise PermissionError('cannot write')
     worker = setup.worker_module.PostWorker(setup.queue, setup.config, setup.stop, writer=fail)
     worker.tick()
-    row = task(setup, key)
-    assert row['state'] == 'uploaded' and row['postprocess']['state'] == 'retry'
-    assert row['postprocess']['ready_at'] == 1060
-    worker.tick()
-    assert task(setup, key)['postprocess']['attempts'] == 1
-    setup.clock[0] = 1060
-    worker.tick()
-    assert task(setup, key)['postprocess']['ready_at'] == 1180
-    worker.store.action(key, 'post_retry', setup.config)
-    restarted = setup.worker_module.PostWorker(setup.queue_module.UploadQueue(setup.queue.directory), setup.config, setup.stop)
+    assert task(setup, key)['postprocess']['state'] == 'failed'
+    assert task(setup, key)['postprocess']['ready_at'] is None
+    setup.clock[0] += 86400
+    restarted = setup.worker_module.PostWorker(setup.queue, setup.config, setup.stop,
+        writer=lambda _: pytest.fail('failed task must not retry'))
     restarted.tick()
-    assert task(setup, key)['postprocess']['state'] == 'done'
-    assert task(setup, key)['attempts'] == 0
-
-
-def test_running_recovery_and_conflict_manual_retry(setup):
-    key = setup.enqueue()
-    worker = setup.worker_module.PostWorker(setup.queue, setup.config, setup.stop)
-    claimed = worker.store.claim()[0]
-    target = Path(claimed['postprocess']['target'])
-    target.parent.mkdir(parents=True)
-    target.write_text('existing different content')
-    worker.tick()
-    assert task(setup, key)['postprocess']['state'] == 'conflict'
     assert task(setup, key)['state'] == 'uploaded'
-    target.unlink()
-    worker.store.action(key, 'post_retry', setup.config)
+    assert task(setup, key)['postprocess']['attempts'] == 1
+    with pytest.raises(ValueError):
+        worker.store.action(key, 'post_retry', setup.config)
+
+
+@pytest.mark.parametrize('old_state', ['running', 'retry'])
+def test_old_incomplete_postprocess_is_not_replayed(setup, old_state):
+    key = setup.enqueue()
+    post = task(setup, key)['postprocess']
+    post.update(state=old_state, attempts=1)
+    setup.queue.update(key, postprocess=post)
+    worker = setup.worker_module.PostWorker(setup.queue, setup.config, setup.stop,
+        writer=lambda _: pytest.fail('legacy attempt must not replay'))
     worker.tick()
-    assert task(setup, key)['postprocess']['state'] == 'done'
+    assert task(setup, key)['postprocess']['state'] == 'failed'
+    assert task(setup, key)['state'] == 'uploaded'
 
 
 def test_disabled_and_old_history_require_explicit_action(setup):
@@ -202,10 +196,10 @@ def test_plugin_upload_success_independent_of_postprocess_failure(setup, monkeyp
     plugin._postprocess.tick()
     plugin.process_tasks()
     row = task(setup, key)
-    assert row['state'] == 'uploaded' and row['postprocess']['state'] == 'retry'
+    assert row['state'] == 'uploaded' and row['postprocess']['state'] == 'failed'
     assert calls == ['upload']
     assert not Path(row['organized_path']).exists()
-    assert plugin.task_action({'task_id': key, 'action': 'post_retry'}).success
+    assert not plugin.task_action({'task_id': key, 'action': 'post_retry'}).success
     plugin.stop_service()
 
 
@@ -217,7 +211,7 @@ def test_planning_failure_still_commits_success(setup, monkeypatch):
     assert row['state'] == 'uploaded' and row['postprocess']['state'] == 'failed'
 
 
-def test_cd2_failure_retries_without_reupload_and_preserves_rate_limit(setup):
+def test_cd2_failure_is_final_and_preserves_rate_limit(setup):
     setup.config['mode'] = 'cd2'
     key = setup.enqueue()
     setup.clock[0] += 45
@@ -238,15 +232,15 @@ def test_cd2_failure_retries_without_reupload_and_preserves_rate_limit(setup):
     worker = setup.worker_module.PostWorker(setup.queue, setup.config, Stop(), adapter_factory=factory)
     worker.tick()
     row = task(setup, key)
-    assert row['state'] == 'uploaded' and row['postprocess']['state'] == 'retry'
+    assert row['state'] == 'uploaded' and row['postprocess']['state'] == 'failed'
     assert waits[-1] == 3
     assert worker.store.stats()['rpc_calls'] == 2
-    setup.clock[0] = row['postprocess']['ready_at']
+    setup.clock[0] += 86400
     restarted = setup.worker_module.PostWorker(setup.queue, setup.config, setup.stop,
         adapter_factory=lambda *_: SimpleNamespace(refresh=lambda *_: None))
     restarted.tick()
-    assert task(setup, key)['postprocess']['state'] == 'done'
-    assert restarted.store.stats()['retries'] == 1
+    assert task(setup, key)['postprocess']['state'] == 'failed'
+    assert restarted.store.stats()['rpc_calls'] == 2
     assert task(setup, key)['attempts'] == 0
 
 

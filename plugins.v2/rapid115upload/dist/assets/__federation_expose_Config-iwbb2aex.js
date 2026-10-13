@@ -1,5 +1,5 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
-import { P as PLUGIN_ID, n as normalizeConfig, l as libraryOptions, q as qbOptions, v as validateAndSave } from './shared-Clnk7wT2.js';
+import { P as PLUGIN_ID, n as normalizeConfig, l as libraryOptions, q as qbOptions, v as validateAndSave } from './shared-DMbgpPgW.js';
 import { _ as _export_sfc } from './_plugin-vue_export-helper-pcqpp-6-.js';
 
 const {createElementVNode:_createElementVNode,createTextVNode:_createTextVNode,resolveComponent:_resolveComponent,withCtx:_withCtx,createVNode:_createVNode,toDisplayString:_toDisplayString,openBlock:_openBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode,vShow:_vShow,withDirectives:_withDirectives,createElementBlock:_createElementBlock,renderList:_renderList,Fragment:_Fragment} = await importShared('vue');
@@ -725,7 +725,7 @@ return (_ctx, _cache) => {
             ]),
             _: 1
           }, 8, ["modelValue"]),
-          _cache[58] || (_cache[58] = _createElementVNode("p", { class: "field-help" }, "两种模式互斥，仅在上传确认成功后执行，不影响上传成功状态与本地文件清理。", -1))
+          _cache[58] || (_cache[58] = _createElementVNode("p", { class: "field-help" }, "两种模式互斥，上传成功后只执行一次。失败仅记录结果，不重试，不影响上传成功状态与本地文件清理。", -1))
         ]),
         (config.postprocess.mode !== 'off')
           ? (_openBlock(), _createElementBlock(_Fragment, { key: 0 }, [
@@ -1012,6 +1012,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-a9b39260"]]);
+const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-24162528"]]);
 
 export { Config as default };

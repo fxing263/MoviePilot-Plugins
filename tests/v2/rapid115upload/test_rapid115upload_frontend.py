@@ -37,12 +37,11 @@ console.log(JSON.stringify({saved,source,other,endpoint,defaults:normalizeConfig
     assert data['defaults'] == {
         'mode': 'off', 'mappings': [], 'cd2_plugin_id': 'CloudDriveDisk',
         'merge_delay': 45, 'max_wait': 180, 'min_interval': 3,
-        'retry_base': 60, 'retry_max': 3600,
     }
 
 
 def test_postprocess_actions_keep_upload_and_frozen_configuration_separate():
-    """按钮不允许把完成任务切换模式重复处理，重试沿用旧目标，补处理显式选用当前配置。"""
+    """按钮不允许把完成任务切换模式重复处理，失败不重试，补处理显式选用当前配置。"""
     script = """
 import assert from 'node:assert/strict';
 const {postprocessAction} = await import(process.argv[1]);
@@ -54,7 +53,7 @@ assert.equal(postprocessAction({state:'uploaded'}), 'post_enqueue');
 assert.equal(postprocessAction({state:'uploaded',postprocess:{state:'disabled'}}), 'post_enqueue');
 assert.equal(postprocessAction({state:'uploaded',postprocess:{state:'failed',attempts:0}}), 'post_enqueue');
 for (const state of ['failed','retry','conflict']) {
- assert.equal(postprocessAction({state:'uploaded',postprocess:{state,target:'/target'}}), 'post_retry');
+ assert.equal(postprocessAction({state:'uploaded',postprocess:{state,target:'/target'}}), '');
 }
 for (const state of ['done','skipped','pending','running']) {
  assert.equal(postprocessAction({state:'uploaded',postprocess:{state,target:'/target'}}), '');

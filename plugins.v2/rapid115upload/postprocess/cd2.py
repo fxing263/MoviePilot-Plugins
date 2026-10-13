@@ -30,25 +30,9 @@ class RefreshAdapter(BdmvCd2Adapter):
         self._check_stop()
         return super()._call(connection, method, request)
 
-    def _directory(self, connection: tuple, path: str) -> bool:
-        try:
-            item = self._find(connection, path)
-        except BdmvCd2Error as exc:
-            code = getattr(exc.__cause__, 'code', None)
-            status = code() if callable(code) else None
-            if getattr(status, 'name', None) == 'NOT_FOUND':
-                return False
-            raise RefreshError(f'CD2 目录不可访问：{path}，未继续探测祖先') from exc
-        full_path = getattr(item, 'fullPathName', '')
-        if not full_path:
-            return False
-        if full_path != path or not getattr(item, 'isDirectory', False):
-            raise RefreshError(f'CD2 返回的目标不是对应目录：{path}')
-        return True
-
-    def _refresh(self, connection: tuple, path: str, cache: dict) -> None:
+    def _refresh(self, connection: tuple, path: str, cache: dict) -> bool:
         if path in cache:
-            return
+            return True
         stream = None
         succeeded = False
         try:
@@ -65,9 +49,18 @@ class RefreshAdapter(BdmvCd2Adapter):
                 raise TimeoutError('CD2 刷新流超时')
             succeeded = True
             cache[path] = True
+            return True
         except InterruptedError:
             raise
         except Exception as exc:
+            # RPC 建立和流读取阶段都可能返回 NOT_FOUND；只解开适配层显式包装。
+            cause = exc
+            while isinstance(cause, BdmvCd2Error) and cause.__cause__ is not None:
+                cause = cause.__cause__
+            code = getattr(cause, 'code', None)
+            status = code() if callable(code) else None
+            if getattr(status, 'name', None) == 'NOT_FOUND':
+                return False
             raise RefreshError(f'CD2 目录刷新未完整完成：{path}') from exc
         finally:
             if not succeeded and stream is not None:
@@ -90,14 +83,12 @@ class RefreshAdapter(BdmvCd2Adapter):
         connection = self._connection()
         pending = []
         current = target
-        while str(current) not in cache and not self._directory(connection, str(current)):
+        while not self._refresh(connection, str(current), cache):
             if current.parent == PurePosixPath('/'):
                 raise RefreshError(f'CD2 挂载根不可访问：{current}')
             pending.append(current)
             current = current.parent
-        self._refresh(connection, str(current), cache)
         for child in reversed(pending):
             self._check_stop()
-            if not self._directory(connection, str(child)):
+            if not self._refresh(connection, str(child), cache):
                 raise RefreshError(f'CD2 刷新祖先后仍未发现目录：{child}')
-            self._refresh(connection, str(child), cache)

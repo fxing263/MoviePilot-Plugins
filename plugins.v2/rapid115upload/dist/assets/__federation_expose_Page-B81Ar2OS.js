@@ -44,11 +44,13 @@ const _hoisted_20 = {
   class: "record-path mt-1"
 };
 const _hoisted_21 = { class: "task-progress" };
-const _hoisted_22 = { key: 0 };
-const _hoisted_23 = {
-  key: 1,
+const _hoisted_22 = { key: 1 };
+const _hoisted_23 = { key: 2 };
+const _hoisted_24 = {
+  key: 3,
   class: "text-medium-emphasis"
 };
+const _hoisted_25 = { class: "mb-3" };
 
 const {computed,onMounted,onUnmounted,ref,watch} = await importShared('vue');
 
@@ -74,6 +76,13 @@ const page = ref(1);
 const pageSize = ref(25);
 const detailsOpen = ref(false);
 const selectedTask = ref(null);
+const actionError = ref('');
+const resolutionOpen = ref(false);
+const resolution = ref('');
+const resolutionTask = ref(null);
+const newFilename = ref('');
+const hasConflict = computed(() => selectedTask.value?.state === 'blocked' && ['size_mismatch', 'directory'].includes(selectedTask.value?.verification?.reason));
+const hasSizeConflict = computed(() => hasConflict.value && selectedTask.value?.verification?.reason === 'size_mismatch');
 const headers = [
   { title: '文件', key: 'file', sortable: false },
   { title: '大小', key: 'size', sortable: false, width: 110 },
@@ -110,6 +119,7 @@ function fileName(path) {
   return path?.split('/').pop() || path
 }
 function openDetails(task) {
+  actionError.value = '';
   selectedTask.value = task;
   detailsOpen.value = true;
 }
@@ -119,14 +129,29 @@ function stateColor(state) {
   if (state === 'waiting' || state === 'running') return 'warning'
   return 'primary'
 }
+function openResolution(action) {
+  resolution.value = action;
+  resolutionTask.value = JSON.parse(JSON.stringify(selectedTask.value));
+  const name = fileName(selectedTask.value.remote_path);
+  const dot = name.lastIndexOf('.');
+  newFilename.value = dot > 0 ? `${name.slice(0, dot)} (本地)${name.slice(dot)}` : `${name} (本地)`;
+  actionError.value = '';
+  resolutionOpen.value = true;
+}
 async function act(action) {
   acting.value = true;
+  actionError.value = '';
   try {
-    const response = await props.api.post(`plugin/${props.pluginId || PLUGIN_ID}/task`, { task_id: selectedTask.value.id, action });
+    const conflictAction = ['rename', 'overwrite'].includes(action);
+    const task = conflictAction ? resolutionTask.value : selectedTask.value;
+    const payload = { task_id: task.id, action };
+    if (conflictAction) Object.assign(payload, { verification: task.verification, filename: newFilename.value, confirmed: action === 'overwrite' });
+    const response = await props.api.post(`plugin/${props.pluginId || PLUGIN_ID}/task`, payload);
     if (response?.success !== true) throw new Error(response?.message || '操作失败')
     detailsOpen.value = false;
+    resolutionOpen.value = false;
     await refresh();
-  } catch (failure) { error.value = failure?.message || String(failure); }
+  } catch (failure) { actionError.value = failure?.message || String(failure); }
   finally { acting.value = false; }
 }
 async function refresh() {
@@ -183,7 +208,7 @@ return (_ctx, _cache) => {
 
   return (__props.navKey)
     ? (_openBlock(), _createElementBlock("div", _hoisted_1, [
-        _cache[22] || (_cache[22] = _createElementVNode("div", { class: "d-flex align-center pa-4" }, [
+        _cache[34] || (_cache[34] = _createElementVNode("div", { class: "d-flex align-center pa-4" }, [
           _createElementVNode("div", { class: "text-h6" }, "115秒传")
         ], -1)),
         (error.value)
@@ -206,7 +231,7 @@ return (_ctx, _cache) => {
               variant: "tonal",
               class: "mx-4 mb-3"
             }, {
-              default: _withCtx(() => [...(_cache[8] || (_cache[8] = [
+              default: _withCtx(() => [...(_cache[14] || (_cache[14] = [
                 _createTextVNode("插件已停用，仍可查看已有记录。", -1)
               ]))]),
               _: 1
@@ -224,7 +249,7 @@ return (_ctx, _cache) => {
                     icon: "mdi-cloud-upload-outline",
                     size: "20"
                   }),
-                  _cache[9] || (_cache[9] = _createTextVNode("上传任务", -1))
+                  _cache[15] || (_cache[15] = _createTextVNode("上传任务", -1))
                 ]),
                 _createElementVNode("div", _hoisted_3, _toDisplayString(tasks.value.length), 1),
                 _createElementVNode("div", _hoisted_4, "已上传 " + _toDisplayString(uploadedCount.value) + " / " + _toDisplayString(tasks.value.length) + " 个 · " + _toDisplayString(formatSize(uploadedBytes.value)) + " / " + _toDisplayString(formatSize(totalBytes.value)), 1),
@@ -403,7 +428,7 @@ return (_ctx, _cache) => {
             }, {
               default: _withCtx(() => [
                 _createVNode(_component_v_card_title, null, {
-                  default: _withCtx(() => [...(_cache[10] || (_cache[10] = [
+                  default: _withCtx(() => [...(_cache[16] || (_cache[16] = [
                     _createTextVNode("BDMV · CD2 上传", -1)
                   ]))]),
                   _: 1
@@ -468,7 +493,7 @@ return (_ctx, _cache) => {
           : _createCommentVNode("", true),
         _createVNode(_component_v_dialog, {
           modelValue: detailsOpen.value,
-          "onUpdate:modelValue": _cache[7] || (_cache[7] = $event => ((detailsOpen).value = $event)),
+          "onUpdate:modelValue": _cache[9] || (_cache[9] = $event => ((detailsOpen).value = $event)),
           "max-width": "720"
         }, {
           default: _withCtx(() => [
@@ -477,7 +502,7 @@ return (_ctx, _cache) => {
                   default: _withCtx(() => [
                     _createVNode(_component_v_card_title, { class: "d-flex align-center" }, {
                       default: _withCtx(() => [
-                        _cache[11] || (_cache[11] = _createTextVNode("任务详情", -1)),
+                        _cache[17] || (_cache[17] = _createTextVNode("任务详情", -1)),
                         _createVNode(_component_v_spacer),
                         _createVNode(_component_v_btn, {
                           icon: "mdi-close",
@@ -490,39 +515,58 @@ return (_ctx, _cache) => {
                     }),
                     _createVNode(_component_v_card_text, { class: "record-details" }, {
                       default: _withCtx(() => [
+                        (actionError.value)
+                          ? (_openBlock(), _createBlock(_component_v_alert, {
+                              key: 0,
+                              type: "error",
+                              variant: "tonal",
+                              class: "mb-3"
+                            }, {
+                              default: _withCtx(() => [
+                                _createTextVNode(_toDisplayString(actionError.value), 1)
+                              ]),
+                              _: 1
+                            }))
+                          : _createCommentVNode("", true),
                         _createElementVNode("div", null, [
-                          _cache[12] || (_cache[12] = _createElementVNode("strong", null, "文件：", -1)),
+                          _cache[18] || (_cache[18] = _createElementVNode("strong", null, "文件：", -1)),
                           _createTextVNode(_toDisplayString(selectedTask.value.relative_path), 1)
                         ]),
                         _createElementVNode("div", null, [
-                          _cache[13] || (_cache[13] = _createElementVNode("strong", null, "状态：", -1)),
+                          _cache[19] || (_cache[19] = _createElementVNode("strong", null, "状态：", -1)),
                           _createTextVNode(_toDisplayString(_unref(STATE_LABELS)[selectedTask.value.state] || selectedTask.value.state), 1)
                         ]),
                         _createElementVNode("div", null, [
-                          _cache[14] || (_cache[14] = _createElementVNode("strong", null, "115路径：", -1)),
+                          _cache[20] || (_cache[20] = _createElementVNode("strong", null, "115路径：", -1)),
                           _createTextVNode(_toDisplayString(selectedTask.value.remote_path), 1)
                         ]),
                         _createElementVNode("div", null, [
-                          _cache[15] || (_cache[15] = _createElementVNode("strong", null, "登记时间：", -1)),
+                          _cache[21] || (_cache[21] = _createElementVNode("strong", null, "登记时间：", -1)),
                           _createTextVNode(_toDisplayString(_unref(formatTime)(selectedTask.value.created_at)), 1)
                         ]),
                         _createElementVNode("div", null, [
-                          _cache[16] || (_cache[16] = _createElementVNode("strong", null, "下次尝试：", -1)),
+                          _cache[22] || (_cache[22] = _createElementVNode("strong", null, "下次尝试：", -1)),
                           _createTextVNode(_toDisplayString(_unref(formatTime)(selectedTask.value.ready_at)), 1)
                         ]),
                         (selectedTask.value.upload_mode === 'normal')
-                          ? (_openBlock(), _createElementBlock("div", _hoisted_22, [...(_cache[17] || (_cache[17] = [
+                          ? (_openBlock(), _createElementBlock("div", _hoisted_22, [...(_cache[23] || (_cache[23] = [
                               _createElementVNode("strong", null, "方式：", -1),
                               _createTextVNode("普通上传", -1)
                             ]))]))
                           : _createCommentVNode("", true),
                         _createElementVNode("div", null, [
-                          _cache[18] || (_cache[18] = _createElementVNode("strong", null, "尝试次数：", -1)),
+                          _cache[24] || (_cache[24] = _createElementVNode("strong", null, "尝试次数：", -1)),
                           _createTextVNode(_toDisplayString(selectedTask.value.attempts), 1)
                         ]),
-                        (selectedTask.value.error)
+                        (selectedTask.value.verification?.remote_bytes != null)
                           ? (_openBlock(), _createElementBlock("div", _hoisted_23, [
-                              _cache[19] || (_cache[19] = _createElementVNode("strong", null, "说明：", -1)),
+                              _cache[25] || (_cache[25] = _createElementVNode("strong", null, "大小校验：", -1)),
+                              _createTextVNode("本地 " + _toDisplayString(selectedTask.value.verification.local_bytes) + " 字节 / 115 " + _toDisplayString(selectedTask.value.verification.remote_bytes) + " 字节", 1)
+                            ]))
+                          : _createCommentVNode("", true),
+                        (selectedTask.value.error)
+                          ? (_openBlock(), _createElementBlock("div", _hoisted_24, [
+                              _cache[26] || (_cache[26] = _createElementVNode("strong", null, "说明：", -1)),
                               _createTextVNode(_toDisplayString(selectedTask.value.error), 1)
                             ]))
                           : _createCommentVNode("", true)
@@ -530,23 +574,51 @@ return (_ctx, _cache) => {
                       _: 1
                     }),
                     (!['running', 'uploaded'].includes(selectedTask.value.state))
-                      ? (_openBlock(), _createBlock(_component_v_card_actions, { key: 0 }, {
+                      ? (_openBlock(), _createBlock(_component_v_card_actions, {
+                          key: 0,
+                          class: "flex-wrap ga-1"
+                        }, {
                           default: _withCtx(() => [
                             _createVNode(_component_v_btn, {
                               disabled: acting.value,
                               onClick: _cache[5] || (_cache[5] = $event => (act('retry')))
                             }, {
-                              default: _withCtx(() => [...(_cache[20] || (_cache[20] = [
-                                _createTextVNode("重新排队", -1)
+                              default: _withCtx(() => [...(_cache[27] || (_cache[27] = [
+                                _createTextVNode("重新校验 / 重试", -1)
                               ]))]),
                               _: 1
                             }, 8, ["disabled"]),
+                            (hasConflict.value)
+                              ? (_openBlock(), _createBlock(_component_v_btn, {
+                                  key: 0,
+                                  disabled: acting.value,
+                                  onClick: _cache[6] || (_cache[6] = $event => (openResolution('rename')))
+                                }, {
+                                  default: _withCtx(() => [...(_cache[28] || (_cache[28] = [
+                                    _createTextVNode("另存为", -1)
+                                  ]))]),
+                                  _: 1
+                                }, 8, ["disabled"]))
+                              : _createCommentVNode("", true),
+                            (hasSizeConflict.value)
+                              ? (_openBlock(), _createBlock(_component_v_btn, {
+                                  key: 1,
+                                  disabled: acting.value,
+                                  color: "warning",
+                                  onClick: _cache[7] || (_cache[7] = $event => (openResolution('overwrite')))
+                                }, {
+                                  default: _withCtx(() => [...(_cache[29] || (_cache[29] = [
+                                    _createTextVNode("覆盖远端", -1)
+                                  ]))]),
+                                  _: 1
+                                }, 8, ["disabled"]))
+                              : _createCommentVNode("", true),
                             _createVNode(_component_v_btn, {
                               disabled: acting.value,
                               color: "error",
-                              onClick: _cache[6] || (_cache[6] = $event => (act('cancel')))
+                              onClick: _cache[8] || (_cache[8] = $event => (act('cancel')))
                             }, {
-                              default: _withCtx(() => [...(_cache[21] || (_cache[21] = [
+                              default: _withCtx(() => [...(_cache[30] || (_cache[30] = [
                                 _createTextVNode("取消任务", -1)
                               ]))]),
                               _: 1
@@ -561,13 +633,102 @@ return (_ctx, _cache) => {
               : _createCommentVNode("", true)
           ]),
           _: 1
-        }, 8, ["modelValue"])
+        }, 8, ["modelValue"]),
+        _createVNode(_component_v_dialog, {
+          modelValue: resolutionOpen.value,
+          "onUpdate:modelValue": _cache[13] || (_cache[13] = $event => ((resolutionOpen).value = $event)),
+          "max-width": "560",
+          persistent: acting.value
+        }, {
+          default: _withCtx(() => [
+            _createVNode(_component_v_card, null, {
+              default: _withCtx(() => [
+                _createVNode(_component_v_card_title, null, {
+                  default: _withCtx(() => [
+                    _createTextVNode(_toDisplayString(resolution.value === 'rename' ? '另存为 · 保留双方' : '确认覆盖远端文件'), 1)
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_v_card_text, { class: "record-details" }, {
+                  default: _withCtx(() => [
+                    (actionError.value)
+                      ? (_openBlock(), _createBlock(_component_v_alert, {
+                          key: 0,
+                          type: "error",
+                          variant: "tonal",
+                          class: "mb-3"
+                        }, {
+                          default: _withCtx(() => [
+                            _createTextVNode(_toDisplayString(actionError.value), 1)
+                          ]),
+                          _: 1
+                        }))
+                      : _createCommentVNode("", true),
+                    _createElementVNode("div", _hoisted_25, _toDisplayString(resolutionTask.value?.remote_path), 1),
+                    (resolution.value === 'rename')
+                      ? (_openBlock(), _createElementBlock(_Fragment, { key: 1 }, [
+                          _createVNode(_component_v_text_field, {
+                            modelValue: newFilename.value,
+                            "onUpdate:modelValue": _cache[10] || (_cache[10] = $event => ((newFilename).value = $event)),
+                            label: "新的115文件名（含扩展名）",
+                            variant: "outlined",
+                            "hide-details": ""
+                          }, null, 8, ["modelValue"]),
+                          _cache[31] || (_cache[31] = _createElementVNode("div", { class: "text-caption mt-2" }, "仅修改此任务的115文件名，目录与本地文件不变。若新名称也已存在，会重新校验。", -1))
+                        ], 64))
+                      : (_openBlock(), _createElementBlock(_Fragment, { key: 2 }, [
+                          _createElementVNode("div", null, "本地 " + _toDisplayString(resolutionTask.value?.verification?.local_bytes) + " 字节 / 115 " + _toDisplayString(resolutionTask.value?.verification?.remote_bytes) + " 字节", 1),
+                          _createVNode(_component_v_alert, {
+                            type: "warning",
+                            variant: "tonal",
+                            class: "mt-3"
+                          }, {
+                            default: _withCtx(() => [...(_cache[32] || (_cache[32] = [
+                              _createTextVNode("将先删除上述115文件，再上传本地文件。上传失败时原文件不会自动恢复；只有上传成功才会执行本地清理及后续标签处理。", -1)
+                            ]))]),
+                            _: 1
+                          })
+                        ], 64))
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_v_card_actions, null, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_v_spacer),
+                    _createVNode(_component_v_btn, {
+                      disabled: acting.value,
+                      onClick: _cache[11] || (_cache[11] = $event => (resolutionOpen.value = false))
+                    }, {
+                      default: _withCtx(() => [...(_cache[33] || (_cache[33] = [
+                        _createTextVNode("返回", -1)
+                      ]))]),
+                      _: 1
+                    }, 8, ["disabled"]),
+                    _createVNode(_component_v_btn, {
+                      loading: acting.value,
+                      color: resolution.value === 'overwrite' ? 'error' : 'primary',
+                      onClick: _cache[12] || (_cache[12] = $event => (act(resolution.value)))
+                    }, {
+                      default: _withCtx(() => [
+                        _createTextVNode(_toDisplayString(resolution.value === 'overwrite' ? '确认覆盖' : '另存并重试'), 1)
+                      ]),
+                      _: 1
+                    }, 8, ["loading", "color"])
+                  ]),
+                  _: 1
+                })
+              ]),
+              _: 1
+            })
+          ]),
+          _: 1
+        }, 8, ["modelValue", "persistent"])
       ]))
     : _createCommentVNode("", true)
 }
 }
 
 };
-const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-5a4c0da1"]]);
+const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-36ebbcf8"]]);
 
 export { Page as default };

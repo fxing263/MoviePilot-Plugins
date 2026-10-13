@@ -15,7 +15,8 @@ from .queue import FileChangedError, file_identity
 
 PREID_BYTES = 128 * 1024 * 1024
 CHUNK_BYTES = 2 * 1024 * 1024
-ENDPOINTS = {"/open/folder/get_info", "/open/folder/add", "/open/upload/init", "/open/upload/get_token"}
+ENDPOINTS = {"/open/folder/get_info", "/open/folder/add", "/open/upload/init", "/open/upload/get_token",
+             "/open/ufile/delete"}
 
 
 class RetryLaterError(RuntimeError):
@@ -135,7 +136,7 @@ class RapidClient:
 
     def _request(self, endpoint: str, data: dict) -> dict:
         if endpoint not in ENDPOINTS:
-            raise ValueError("仅允许目录查询、建目录及秒传初始化")
+            raise ValueError("不支持的115接口")
         if self.stop.wait(max(0, 1 - (time.monotonic() - self._last_request))):
             raise InterruptedError("插件已停止")
         token = self.token_provider()
@@ -238,6 +239,27 @@ class RapidClient:
             raise RemoteConflictError(f"同名文件大小不一致：本地 {local_size} 字节，115 {size} 字节；未覆盖",
                                       {**diagnostic, "reason": "size_mismatch"})
         return {"file_id": str(existing["file_id"]), "verified_existing": True}
+
+    def resolve_overwrite(self, task: dict, stream: BinaryIO, persist: Callable[[dict], None]) -> None:
+        """只删除显式确认的同一文件；先落盘删除意图，结果不明时禁止自动重发删除。"""
+        intent = task.get("overwrite", {})
+        if not intent:
+            return
+        try:
+            self.verify_existing(task, {})
+        except RemoteConflictError as error:
+            diagnostic = error.diagnostic
+            if (intent.get("state") != "authorized" or intent.get("remote_path") != task["remote_path"]
+                    or diagnostic.get("reason") != "size_mismatch"
+                    or any(intent.get(key) != diagnostic.get(key)
+                           for key in ("file_id", "remote_bytes", "local_bytes"))):
+                raise RemoteConflictError("远端文件已变化或上次删除结果不明确，请重新确认覆盖", diagnostic) from error
+            check_source(stream, task)
+            persist({**intent, "state": "deleting"})
+            self._request("/open/ufile/delete", {"file_ids": int(diagnostic["file_id"])})
+            # 删除后必须重新确认路径，不能将删除接口成功等同于上传成功。
+            self.verify_existing(task, {})
+        persist({})
 
     def attempt(self, task: dict, stream: BinaryIO, hashes: dict) -> Optional[dict]:
         """返回成功凭据或未命中；未命中保留初始化信息，由队列决定是否普通上传。"""

@@ -51,7 +51,7 @@ class Rapid115Upload(_PluginBase):
     plugin_name = "媒体整理增强"
     plugin_desc = "接入MP整理，秒传重试后普通上传，整种子上传后回写qB标签。"
     plugin_icon = "mdi-cloud-upload-outline"
-    plugin_version = "1.2.5"
+    plugin_version = "1.2.6"
     plugin_author = "MoviePilot local"
     author_url = "https://github.com/jxxghp/MoviePilot"
     plugin_config_prefix = "rapid115upload_"
@@ -260,6 +260,9 @@ class Rapid115Upload(_PluginBase):
                 self._queue.update(task["id"], hashes=hashes)
                 report("checking")
                 client = RapidClient(self._stop)
+                if task.get("overwrite"):
+                    client.resolve_overwrite(task, stream, lambda intent: task.update(
+                        self._queue.update(task["id"], overwrite=intent)))
                 result = client.attempt(task, stream, hashes)
                 if result is None:
                     misses = task.get("instant_misses", 0) + 1
@@ -371,11 +374,11 @@ class Rapid115Upload(_PluginBase):
             return Response(success=False, message="读取秒传记录失败，原队列已保留")
 
     def task_action(self, payload: dict = Body(...)) -> Response:
-        """重试仅重新排队，恢复缺失文件后可继续；取消不删除本地或远端文件。"""
+        """冲突处理仅登记意图，网络操作由后台执行；取消不删除文件也不标记成功。"""
         try:
             if self._queue is None or not isinstance(payload.get("task_id"), str):
                 raise ValueError("任务不存在")
-            self._queue.action(payload["task_id"], payload.get("action"))
+            self._queue.action(payload["task_id"], payload.get("action"), payload)
             return Response(success=True)
         except (OSError, ValueError, TypeError) as error:
             return Response(success=False, message=str(error))

@@ -63,6 +63,7 @@
       <v-card v-if="selectedTask">
         <v-card-title class="d-flex align-center">任务详情<v-spacer /><v-btn icon="mdi-close" variant="text" aria-label="关闭详情" @click="detailsOpen = false" /></v-card-title>
         <v-card-text class="record-details">
+          <v-alert v-if="actionError" type="error" variant="tonal" class="mb-3">{{ actionError }}</v-alert>
           <div><strong>文件：</strong>{{ selectedTask.relative_path }}</div>
           <div><strong>状态：</strong>{{ STATE_LABELS[selectedTask.state] || selectedTask.state }}</div>
           <div><strong>115路径：</strong>{{ selectedTask.remote_path }}</div>
@@ -70,11 +71,35 @@
           <div><strong>下次尝试：</strong>{{ formatTime(selectedTask.ready_at) }}</div>
           <div v-if="selectedTask.upload_mode === 'normal'"><strong>方式：</strong>普通上传</div>
           <div><strong>尝试次数：</strong>{{ selectedTask.attempts }}</div>
+          <div v-if="selectedTask.verification?.remote_bytes != null"><strong>大小校验：</strong>本地 {{ selectedTask.verification.local_bytes }} 字节 / 115 {{ selectedTask.verification.remote_bytes }} 字节</div>
           <div v-if="selectedTask.error" class="text-medium-emphasis"><strong>说明：</strong>{{ selectedTask.error }}</div>
         </v-card-text>
-        <v-card-actions v-if="!['running', 'uploaded'].includes(selectedTask.state)">
-          <v-btn :disabled="acting" @click="act('retry')">重新排队</v-btn>
+        <v-card-actions v-if="!['running', 'uploaded'].includes(selectedTask.state)" class="flex-wrap ga-1">
+          <v-btn :disabled="acting" @click="act('retry')">重新校验 / 重试</v-btn>
+          <v-btn v-if="hasConflict" :disabled="acting" @click="openResolution('rename')">另存为</v-btn>
+          <v-btn v-if="hasSizeConflict" :disabled="acting" color="warning" @click="openResolution('overwrite')">覆盖远端</v-btn>
           <v-btn :disabled="acting" color="error" @click="act('cancel')">取消任务</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+    <v-dialog v-model="resolutionOpen" max-width="560" :persistent="acting">
+      <v-card>
+        <v-card-title>{{ resolution === 'rename' ? '另存为 · 保留双方' : '确认覆盖远端文件' }}</v-card-title>
+        <v-card-text class="record-details">
+          <v-alert v-if="actionError" type="error" variant="tonal" class="mb-3">{{ actionError }}</v-alert>
+          <div class="mb-3">{{ resolutionTask?.remote_path }}</div>
+          <template v-if="resolution === 'rename'">
+            <v-text-field v-model="newFilename" label="新的115文件名（含扩展名）" variant="outlined" hide-details />
+            <div class="text-caption mt-2">仅修改此任务的115文件名，目录与本地文件不变。若新名称也已存在，会重新校验。</div>
+          </template>
+          <template v-else>
+            <div>本地 {{ resolutionTask?.verification?.local_bytes }} 字节 / 115 {{ resolutionTask?.verification?.remote_bytes }} 字节</div>
+            <v-alert type="warning" variant="tonal" class="mt-3">将先删除上述115文件，再上传本地文件。上传失败时原文件不会自动恢复；只有上传成功才会执行本地清理及后续标签处理。</v-alert>
+          </template>
+        </v-card-text>
+        <v-card-actions><v-spacer />
+          <v-btn :disabled="acting" @click="resolutionOpen = false">返回</v-btn>
+          <v-btn :loading="acting" :color="resolution === 'overwrite' ? 'error' : 'primary'" @click="act(resolution)">{{ resolution === 'overwrite' ? '确认覆盖' : '另存并重试' }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -100,6 +125,13 @@ const page = ref(1)
 const pageSize = ref(25)
 const detailsOpen = ref(false)
 const selectedTask = ref(null)
+const actionError = ref('')
+const resolutionOpen = ref(false)
+const resolution = ref('')
+const resolutionTask = ref(null)
+const newFilename = ref('')
+const hasConflict = computed(() => selectedTask.value?.state === 'blocked' && ['size_mismatch', 'directory'].includes(selectedTask.value?.verification?.reason))
+const hasSizeConflict = computed(() => hasConflict.value && selectedTask.value?.verification?.reason === 'size_mismatch')
 const headers = [
   { title: '文件', key: 'file', sortable: false },
   { title: '大小', key: 'size', sortable: false, width: 110 },
@@ -136,6 +168,7 @@ function fileName(path) {
   return path?.split('/').pop() || path
 }
 function openDetails(task) {
+  actionError.value = ''
   selectedTask.value = task
   detailsOpen.value = true
 }
@@ -145,14 +178,29 @@ function stateColor(state) {
   if (state === 'waiting' || state === 'running') return 'warning'
   return 'primary'
 }
+function openResolution(action) {
+  resolution.value = action
+  resolutionTask.value = JSON.parse(JSON.stringify(selectedTask.value))
+  const name = fileName(selectedTask.value.remote_path)
+  const dot = name.lastIndexOf('.')
+  newFilename.value = dot > 0 ? `${name.slice(0, dot)} (本地)${name.slice(dot)}` : `${name} (本地)`
+  actionError.value = ''
+  resolutionOpen.value = true
+}
 async function act(action) {
   acting.value = true
+  actionError.value = ''
   try {
-    const response = await props.api.post(`plugin/${props.pluginId || PLUGIN_ID}/task`, { task_id: selectedTask.value.id, action })
+    const conflictAction = ['rename', 'overwrite'].includes(action)
+    const task = conflictAction ? resolutionTask.value : selectedTask.value
+    const payload = { task_id: task.id, action }
+    if (conflictAction) Object.assign(payload, { verification: task.verification, filename: newFilename.value, confirmed: action === 'overwrite' })
+    const response = await props.api.post(`plugin/${props.pluginId || PLUGIN_ID}/task`, payload)
     if (response?.success !== true) throw new Error(response?.message || '操作失败')
     detailsOpen.value = false
+    resolutionOpen.value = false
     await refresh()
-  } catch (failure) { error.value = failure?.message || String(failure) }
+  } catch (failure) { actionError.value = failure?.message || String(failure) }
   finally { acting.value = false }
 }
 async function refresh() {

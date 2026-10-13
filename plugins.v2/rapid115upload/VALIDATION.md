@@ -252,3 +252,15 @@ BDMV扫描改为五段Cron，旧HH:MM等价迁移，进度轮询仍一分钟。�
 用户最新明确要求目标名称/路径和字节大小一致即可，不比较远端SHA1。size_byte依据宿主u115.py的__get_info_item；file_id补查依据p115client fs_info公开契约（https://github.com/ChenyangGao/p115client/blob/main/p115client/client.py，引用115文档https://www.yuque.com/115yun/open/rl8zrhe2nag21dfw），同接口支持POST。未猜新增大小字段。
 
 七文件相关pytest：312 passed；client.py、queue.py、__init__.py及test_rapid115upload.py pylint10/10。涵盖无SHA1/不同SHA1同大小复用、整数/数字字符串/0字节、拒绝非法大小、file_id补查、限流等待、元数据三次暂停及重新排队恢复。不访问真实115进行测试。前端不变，继续使用1.2.4已验证产物。
+
+## 2026-10-13 1.2.6 同名冲突处理
+
+插件接口/队列/115客户端及队列详情页面内实现；不改MP宿主业务代码、数据库结构、依赖、BDMV或qB筛选合同。用户要求直接实施，不创建Trellis任务。删除协议沿用宿主U115Pan.delete：POST /open/ufile/delete，file_ids为文件ID。授权仅来自当前blocked大小冲突的确认快照；网络调用前持久化意图。测试全部使用临时文件和协议替身，没有对真实115文件进行删除/覆盖验证。
+
+在 `/home/zhaojg/MoviePilot-upgrades/jxxghp-MoviePilot-09f62ff` 执行：
+
+- `uv run --locked --no-sync pytest tests/test_rapid115upload.py tests/test_rapid115upload_frontend.py tests/test_rapid115upload_reorganize.py tests/test_rapid115upload_reorganize_persistence.py tests/test_qbittorrent_tag_monitor.py tests/test_rapid115upload_bdmv.py tests/test_rapid115upload_bdmv_cd2.py -q`：340 passed。
+- `uv run --locked --no-sync pylint --reports=n /home/zhaojg/MoviePilot/local-plugins/plugins.v2/rapid115upload/client.py /home/zhaojg/MoviePilot/local-plugins/plugins.v2/rapid115upload/queue.py /home/zhaojg/MoviePilot/local-plugins/plugins.v2/rapid115upload/__init__.py tests/test_rapid115upload.py tests/test_rapid115upload_frontend.py`：10/10。
+- `npm run build --prefix local-plugins/plugins.v2/rapid115upload/frontend`：成功。
+
+新增覆盖：另存为持久化及重复事件不丢关联、路径越界/过期确认/目录覆盖拒绝、重试取消撤销删除授权、远端变化及删除超时禁止重发、删除后重启恢复、本地身份变化、同目标并发保护、仅成功上传清理本地，以及前端确认快照/错误保留弹窗。宿主全量、架构快照及真实115覆盖操作未执行；原生媒体记录前端未修改。

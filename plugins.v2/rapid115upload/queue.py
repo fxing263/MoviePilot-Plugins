@@ -145,15 +145,42 @@ class UploadQueue:
             self._save(snapshot)
             return copy.deepcopy(task)
 
-    def action(self, task_id: str, action: str) -> None:
-        """终态成功不重传；运行中的操作不能被取消或强制重入。"""
+    def action(self, task_id: str, action: str, options: Optional[dict] = None) -> None:
+        """冲突操作锁内落盘；覆盖仅授权当前已确认的文件，运行中及成功任务不可修改。"""
+        options = options or {}
         with self._locked() as snapshot:
             task = snapshot["tasks"].get(task_id)
-            if not task or action not in {"retry", "cancel"}:
+            if not task or action not in {"retry", "cancel", "rename", "overwrite"}:
                 raise ValueError("任务不存在或操作不支持")
             if task["state"] in {"running", "uploaded"}:
                 raise ValueError("正在执行或已经上传的任务不能操作")
-            task.update(state="waiting" if action == "retry" else "cancelled",
+            intent = {}
+            if action in {"rename", "overwrite"}:
+                diagnostic = task.get("verification", {})
+                if task["state"] != "blocked" or diagnostic.get("reason") not in {"size_mismatch", "directory"}:
+                    raise ValueError("请先重新校验，确认同名冲突后再处理")
+                if options.get("verification") != diagnostic:
+                    raise ValueError("冲突信息已变化，请刷新任务详情")
+                remote = PurePosixPath(task["remote_path"])
+                if action == "rename":
+                    name = options.get("filename")
+                    if (not isinstance(name, str) or not name.strip() or name in {".", "..", remote.name}
+                            or any(char in name for char in '/\\') or any(ord(char) < 32 for char in name)):
+                        raise ValueError("请输入不同的文件名，不能包含目录或控制字符")
+                    target = str(remote.with_name(name))
+                else:
+                    if (options.get("confirmed") is not True or diagnostic.get("reason") != "size_mismatch"
+                            or not str(diagnostic.get("file_id", "")).isascii()
+                            or not str(diagnostic.get("file_id", "")).isdigit()):
+                        raise ValueError("覆盖必须确认具体的同名文件，不支持删除目录")
+                    target = str(remote)
+                    intent = {"state": "authorized", "remote_path": target, **diagnostic}
+                if any(other["id"] != task_id and other["remote_path"] == target
+                       and other["state"] != "cancelled" for other in snapshot["tasks"].values()):
+                    raise ValueError("目标路径已被其他上传任务使用")
+                task["remote_path"] = target
+            # 普通重试不继承旧的删除授权；超时结果需重新校验后由用户重新确认。
+            task.update(state="cancelled" if action == "cancel" else "waiting", overwrite=intent,
                         ready_at=self.clock(), error="", metadata_failures=0, verification={})
             self._save(snapshot)
 
@@ -181,8 +208,11 @@ class UploadQueue:
         with self._locked() as snapshot:
             if snapshot.get("cooldown_until", 0) > self.clock():
                 return None
+            running_paths = {task["remote_path"] for task in snapshot["tasks"].values()
+                             if task["state"] == "running"}
             due = [task for task in snapshot["tasks"].values()
-                   if task["state"] == "waiting" and task["ready_at"] <= self.clock()]
+                   if task["state"] == "waiting" and task["ready_at"] <= self.clock()
+                   and task["remote_path"] not in running_paths]
             if not due:
                 return None
             task = min(due, key=lambda item: item["ready_at"])

@@ -64,7 +64,6 @@ const bdmv = ref({ tasks: [], error: '' });
 const bdmvLabels = { waiting: '等待上传', submitting: '正在提交', unknown: '等待CD2确认', copying: 'CD2上传中', tagging: '正在更新标签', done: '已上传', blocked: '需要处理' };
 const bdmvHeaders = [{ title: '种子 / 目标目录', key: 'name' }, { title: '状态', key: 'state' }, { title: '进度', key: 'progress', sortable: false }];
 const tasks = ref([]);
-const torrentErrors = ref({});
 const loading = ref(false);
 const acting = ref(false);
 const enabled = ref(false);
@@ -139,7 +138,6 @@ async function refresh() {
     if (response?.success !== true) throw new Error(response?.message || '读取状态失败')
     tasks.value = response.data?.tasks || [];
     bdmv.value = response.data?.bdmv || { tasks: [], error: '' };
-    torrentErrors.value = Object.fromEntries(Object.entries(response.data?.torrents || {}).filter(([, status]) => status.error));
     if (page.value > pageCount.value) page.value = Math.max(1, pageCount.value);
     if (selectedTask.value) selectedTask.value = tasks.value.find(task => task.id === selectedTask.value.id) || null;
     enabled.value = response.data?.enabled === true;
@@ -251,19 +249,6 @@ return (_ctx, _cache) => {
           ]),
           _: 1
         }),
-        (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(torrentErrors.value, (status, key) => {
-          return (_openBlock(), _createBlock(_component_v_alert, {
-            key: key,
-            type: "warning",
-            variant: "tonal",
-            class: "mx-4 mb-3"
-          }, {
-            default: _withCtx(() => [
-              _createTextVNode(_toDisplayString(key) + "：" + _toDisplayString(status.error), 1)
-            ]),
-            _: 2
-          }, 1024))
-        }), 128)),
         _createVNode(_component_v_card, {
           variant: "outlined",
           class: "queue-card mx-4"
@@ -583,6 +568,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-f9f68dbb"]]);
+const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-5a4c0da1"]]);
 
 export { Page as default };

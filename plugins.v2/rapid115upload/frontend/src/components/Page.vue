@@ -11,7 +11,6 @@
         <div class="d-flex flex-wrap ga-2 mt-2"><v-chip v-for="item in summary" :key="item.state" size="small" variant="tonal" :color="stateColor(item.state)">{{ item.label }} {{ item.count }}</v-chip></div>
       </v-card-text>
     </v-card>
-    <v-alert v-for="(status, key) in torrentErrors" :key="key" type="warning" variant="tonal" class="mx-4 mb-3">{{ key }}：{{ status.error }}</v-alert>
     <v-card variant="outlined" class="queue-card mx-4">
       <v-card-item>
         <div class="d-flex flex-wrap align-center ga-2">
@@ -91,7 +90,6 @@ const bdmv = ref({ tasks: [], error: '' })
 const bdmvLabels = { waiting: '等待上传', submitting: '正在提交', unknown: '等待CD2确认', copying: 'CD2上传中', tagging: '正在更新标签', done: '已上传', blocked: '需要处理' }
 const bdmvHeaders = [{ title: '种子 / 目标目录', key: 'name' }, { title: '状态', key: 'state' }, { title: '进度', key: 'progress', sortable: false }]
 const tasks = ref([])
-const torrentErrors = ref({})
 const loading = ref(false)
 const acting = ref(false)
 const enabled = ref(false)
@@ -166,7 +164,6 @@ async function refresh() {
     if (response?.success !== true) throw new Error(response?.message || '读取状态失败')
     tasks.value = response.data?.tasks || []
     bdmv.value = response.data?.bdmv || { tasks: [], error: '' }
-    torrentErrors.value = Object.fromEntries(Object.entries(response.data?.torrents || {}).filter(([, status]) => status.error))
     if (page.value > pageCount.value) page.value = Math.max(1, pageCount.value)
     if (selectedTask.value) selectedTask.value = tasks.value.find(task => task.id === selectedTask.value.id) || null
     enabled.value = response.data?.enabled === true

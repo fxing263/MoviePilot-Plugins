@@ -27,7 +27,28 @@ class RetryLaterError(RuntimeError):
 
 
 class RemoteConflictError(ValueError):
-    """同路径已有文件但不能确认内容一致，禁止覆盖。"""
+    """已确认同路径类型或大小冲突，禁止覆盖。"""
+
+    def __init__(self, message: str, diagnostic: Optional[dict] = None) -> None:
+        super().__init__(message)
+        self.diagnostic = diagnostic or {}
+
+
+class RemoteMetadataError(RetryLaterError):
+    """响应缺少校验字段，有限重试后保留待处理，不能视为上传成功。"""
+
+    def __init__(self, message: str, diagnostic: dict) -> None:
+        super().__init__(message)
+        self.diagnostic = diagnostic
+
+
+def _byte_size(value: object) -> Optional[int]:
+    """仅接受精确非负整数字节数，缺失、布尔、浮点和格式化文本均不猜测。"""
+    if type(value) is int and value >= 0:
+        return value
+    if isinstance(value, str) and re.fullmatch(r"[0-9]+", value.strip()):
+        return int(value.strip())
+    return None
 
 
 def host_access_token() -> str:
@@ -177,17 +198,46 @@ class RapidClient:
             parent_id = str(info["file_id"])
         return parent_id
 
-    def verify_existing(self, task: dict, hashes: dict) -> Optional[dict]:
-        """只接受远端路径、大小和 SHA1 一致的文件凭据。"""
+    def verify_existing(self, task: dict, _hashes: dict) -> Optional[dict]:
+        """按用户策略，仅凭精确目标路径、文件类型及字节大小复用；不比较 SHA1。"""
         remote = PurePosixPath(task["remote_path"])
         existing = self._info(remote)
-        if existing is not None:
-            sha1 = str(existing.get("sha1") or existing.get("file_sha1") or "").upper()
-            size = str(existing.get("size_byte", ""))
-            if str(existing.get("file_category")) == "1" and sha1 == hashes["fileid"] and size == str(task["identity"][2]):
-                return {"file_id": str(existing["file_id"]), "verified_existing": True}
-            raise RemoteConflictError("115已有同名文件，但大小/SHA1无法确认一致；未覆盖")
-        return None
+        if existing is None:
+            return None
+        # get_info 支持 path 或 file_id；宿主同样使用 size_byte，不猜其他大小字段。
+        size = _byte_size(existing.get("size_byte"))
+        category = str(existing.get("file_category", ""))
+        if category != "0" and (size is None or category not in {"0", "1"}):
+            result = self._request("/open/folder/get_info", {"file_id": str(existing["file_id"])})
+            detail = result.get("data")
+            if result.get("code") in {20004, 430004}:
+                raise RetryLaterError("115同名文件状态发生变化，稍后重新查询")
+            if isinstance(detail, dict) and str(detail.get("file_id")) == str(existing["file_id"]):
+                existing = {**existing, **detail}
+                size = _byte_size(existing.get("size_byte"))
+                category = str(existing.get("file_category", ""))
+        local_size = task["identity"][2]
+        diagnostic = {"local_bytes": local_size, "remote_bytes": size,
+                      "file_id": str(existing["file_id"]), "policy": "path_size"}
+        if category == "0":
+            raise RemoteConflictError("115同名路径是目录，不能作为文件复用；未覆盖",
+                                      {**diagnostic, "reason": "directory"})
+        if category != "1":
+            raise RemoteMetadataError("115未返回有效文件类型，暂无法确认同名路径",
+                                      {**diagnostic, "reason": "invalid_category"})
+        if existing.get("file_name") is not None and existing["file_name"] != remote.name:
+            raise RemoteMetadataError("115查询返回的文件名与目标路径不一致，暂无法确认",
+                                      {**diagnostic, "reason": "name_mismatch"})
+        if size is None:
+            missing = existing.get("size_byte") is None
+            reason = "missing_size" if missing else "invalid_size"
+            message = "缺失" if missing else "格式异常"
+            raise RemoteMetadataError(f"115同名文件大小字段{message}：本地 {local_size} 字节，远端字节数未知；未覆盖",
+                                      {**diagnostic, "reason": reason})
+        if size != local_size:
+            raise RemoteConflictError(f"同名文件大小不一致：本地 {local_size} 字节，115 {size} 字节；未覆盖",
+                                      {**diagnostic, "reason": "size_mismatch"})
+        return {"file_id": str(existing["file_id"]), "verified_existing": True}
 
     def attempt(self, task: dict, stream: BinaryIO, hashes: dict) -> Optional[dict]:
         """返回成功凭据或未命中；未命中保留初始化信息，由队列决定是否普通上传。"""

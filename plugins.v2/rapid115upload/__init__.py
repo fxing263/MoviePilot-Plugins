@@ -18,7 +18,7 @@ from app.sdk.plugin.base import _PluginBase
 from app.sdk.security import verify_token
 
 from .bdmv import BdmvWorker
-from .client import RapidClient, RemoteConflictError, RetryLaterError, calculate_hashes, open_source
+from .client import RapidClient, RemoteConflictError, RemoteMetadataError, RetryLaterError, calculate_hashes, open_source
 from .queue import FileChangedError, UploadQueue
 from .normal import upload
 from .progress import UploadProgress
@@ -51,7 +51,7 @@ class Rapid115Upload(_PluginBase):
     plugin_name = "媒体整理增强"
     plugin_desc = "接入MP整理，秒传重试后普通上传，整种子上传后回写qB标签。"
     plugin_icon = "mdi-cloud-upload-outline"
-    plugin_version = "1.2.4"
+    plugin_version = "1.2.5"
     plugin_author = "MoviePilot local"
     author_url = "https://github.com/jxxghp/MoviePilot"
     plugin_config_prefix = "rapid115upload_"
@@ -270,13 +270,22 @@ class Rapid115Upload(_PluginBase):
             if result is None:
                 self._queue.defer(task, "未命中秒传，已停止本次尝试，等待下次重试")
             else:
-                self._queue.update(task["id"], state="uploaded", receipt=result,
+                self._queue.update(task["id"], state="uploaded", receipt=result, verification={}, metadata_failures=0,
                                    uploaded_at=time.time(), ready_at=None, error="")
                 self._remove_uploaded_file(task)
                 logger.info(f"115上传成功：{task['organized_path']} → {task['remote_path']}")
             self._error = ""
-        except (FileNotFoundError, FileChangedError, RemoteConflictError) as error:
+        except RemoteConflictError as error:
+            self._queue.update(task["id"], state="blocked", error=str(error), verification=error.diagnostic)
+        except (FileNotFoundError, FileChangedError) as error:
             self._queue.update(task["id"], state="blocked", error=str(error))
+        except RemoteMetadataError as error:
+            failures = task.get("metadata_failures", 0) + 1
+            self._queue.update(task["id"], metadata_failures=failures, verification=error.diagnostic)
+            if failures >= 3:
+                self._queue.update(task["id"], state="blocked", error=f"{error}；连续3次校验信息不完整，可重新排队复查")
+            else:
+                self._queue.defer(task, str(error))
         except InterruptedError:
             self._queue.defer(task, "插件已停止，重新启用后继续")
         except RetryLaterError as error:

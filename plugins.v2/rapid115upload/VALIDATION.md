@@ -246,3 +246,9 @@ BDMV扫描改为五段Cron，旧HH:MM等价迁移，进度轮询仍一分钟。�
 ## 2026-10-13 1.2.4 队列提示展示
 
 按用户要求移除普通上传队列中的种子标签提示，不改变后台核对及重试。前端构建成功；test_rapid115upload_frontend.py：12 passed。
+
+## 2026-10-13 1.2.5 同名复用策略
+
+用户最新明确要求目标名称/路径和字节大小一致即可，不比较远端SHA1。size_byte依据宿主u115.py的__get_info_item；file_id补查依据p115client fs_info公开契约（https://github.com/ChenyangGao/p115client/blob/main/p115client/client.py，引用115文档https://www.yuque.com/115yun/open/rl8zrhe2nag21dfw），同接口支持POST。未猜新增大小字段。
+
+七文件相关pytest：312 passed；client.py、queue.py、__init__.py及test_rapid115upload.py pylint10/10。涵盖无SHA1/不同SHA1同大小复用、整数/数字字符串/0字节、拒绝非法大小、file_id补查、限流等待、元数据三次暂停及重新排队恢复。不访问真实115进行测试。前端不变，继续使用1.2.4已验证产物。

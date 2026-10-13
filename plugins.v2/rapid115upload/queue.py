@@ -154,7 +154,7 @@ class UploadQueue:
             if task["state"] in {"running", "uploaded"}:
                 raise ValueError("正在执行或已经上传的任务不能操作")
             task.update(state="waiting" if action == "retry" else "cancelled",
-                        ready_at=self.clock(), error="")
+                        ready_at=self.clock(), error="", metadata_failures=0, verification={})
             self._save(snapshot)
 
     @contextmanager

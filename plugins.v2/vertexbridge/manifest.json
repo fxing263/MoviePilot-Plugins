@@ -1,0 +1,17 @@
+{
+  "VertexBridge": {
+    "name": "Vertex 桥接",
+    "description": "提供 MP 原生媒体识别、VT 通知转发与 /vt 指令桥接。",
+    "version": "1.2.1",
+    "icon": "mdi-transit-connection-variant",
+    "author": "Vertex local",
+    "level": 1,
+    "v2": true,
+    "history": {
+      "v1.2.1": "原生识别为空时探测 TMDB，故障返回 503 供 Vertex 重试；探测缓存 60 秒。",
+      "v1.2.0": "识别协议 v2：按 MP 分隔设置返回独立占位符列表，保留副标题全集数量。",
+      "v1.1.0": "新增独立识别开关，复用 MP 原生解析与缓存，无需修改 MP 核心。",
+      "v1.0.0": "通知转发与 /vt 指令桥接；独立密钥、允许用户、查询与控制权限分离。"
+    }
+  }
+}

@@ -1,5 +1,6 @@
 """将 Vertex 媒体识别、通知和聊天指令接入 MoviePilot。"""
 
+import copy
 import hashlib
 import inspect
 import re
@@ -82,6 +83,27 @@ def _meta_snapshot(meta: Any) -> Dict[str, Any]:
     return result
 
 
+# 站点副标题常以分类前缀开头（韩剧：、动态漫:），只剥离以剧／漫／片／综艺／动画结尾的短前缀，
+# 不误删「沙丘：预言」这类名字本身的冒号。
+_SUBTITLE_TAG = re.compile(r"^[\u4e00-\u9fff]{0,4}(?:剧|漫|片|综艺|动画)\s*[:：]\s*")
+_SUBTITLE_NOISE = re.compile(
+    r"第\s*[0-9一二三四五六七八九十百千零]+(?:\s*[-~～至]\s*[0-9一二三四五六七八九十百千零]+)?\s*[季集期部话話]"
+    r"|全\s*[0-9]+\s*[集话話期]|[0-9]+\s*集全|共\s*[0-9]+\s*[集话話期]"
+    r"|\[[^\]]*\]|【[^】]*】|（[^）]*）|\([^)]*\)"
+)
+
+
+def _subtitle_name(subtitle: str) -> str:
+    """取副标题首段的中文作品名；没有中文或过长时返回空，不猜测。"""
+    head = re.split(r"[|｜]", subtitle or "", maxsplit=1)[0].strip()
+    head = _SUBTITLE_TAG.sub("", head, count=1)
+    head = re.split(r"\s*/\s*", head, maxsplit=1)[0]
+    name = re.sub(r"\s+", " ", _SUBTITLE_NOISE.sub(" ", head)).strip(" -_.·:：")
+    if not name or len(name) > 60 or not re.search(r"[\u4e00-\u9fff]", name):
+        return ""
+    return name
+
+
 def _recognize_native(payload: RecognitionRequest) -> RecognitionResponse:
     """在 MP 进程内使用原生解析和媒体链，原始季集在识别前独立快照。"""
     from app.chain.media import MediaChain
@@ -104,6 +126,17 @@ def _recognize_native(payload: RecognitionRequest) -> RecognitionResponse:
     # 不同 MP 版本使用不同参数名；老版本无此参数时由原生链默认识别。
     kwargs = {"media_source": "themoviedb"} if "media_source" in parameters else {"source": "themoviedb"} if "source" in parameters else {}
     media = recognize(meta, **kwargs)
+    if media is None:
+        # MP 不用副标题里的中文名检索；英文／拼音名未命中时，以副标题中文名再走一次原生识别。
+        # 只替换检索名称，季集、年份和质量仍来自原标题解析。
+        name = _subtitle_name(payload.subtitle)
+        if name and name != (meta.cn_name or ""):
+            retry = copy.deepcopy(meta)
+            retry.cn_name, retry.en_name = name, None
+            media = recognize(retry, **kwargs)
+            if media is not None:
+                logger.info(f"Vertex 识别：英文名未命中，按副标题中文名「{name}」识别成功")
+                meta = retry
     return RecognitionResponse(
         meta_info={**meta.to_dict(), "customization": customization_meta["customization"],
                    "customization_items": customization_meta["customization_items"]}, source_meta_info=source,
@@ -191,7 +224,7 @@ class VertexBridge(_PluginBase):
     plugin_name = "Vertex 桥接"
     plugin_desc = "提供 MP 原生媒体识别、VT 通知转发与 /vt 指令桥接。"
     plugin_icon = "mdi-transit-connection-variant"
-    plugin_version = "1.2.1"
+    plugin_version = "1.3.0"
     plugin_author = "Vertex local"
     author_url = "https://github.com/vertex-app/vertex"
     plugin_config_prefix = "vertexbridge_"

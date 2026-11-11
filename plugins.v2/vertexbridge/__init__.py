@@ -62,6 +62,8 @@ class RecognitionResponse(BaseModel):
     """保留原生字段，避免宿主旧版 Context 响应模型裁掉质量信息。"""
 
     recognition_version: int = 2
+    # 插件升级后 Vertex 据此把旧版本未匹配的条目自动重识别一次。
+    bridge_version: str = ""
     meta_info: Dict[str, Any]
     source_meta_info: Dict[str, Any]
     media_info: Optional[Dict[str, Any]] = None
@@ -224,7 +226,7 @@ class VertexBridge(_PluginBase):
     plugin_name = "Vertex 桥接"
     plugin_desc = "提供 MP 原生媒体识别、VT 通知转发与 /vt 指令桥接。"
     plugin_icon = "mdi-transit-connection-variant"
-    plugin_version = "1.3.0"
+    plugin_version = "1.3.1"
     plugin_author = "Vertex local"
     author_url = "https://github.com/vertex-app/vertex"
     plugin_config_prefix = "vertexbridge_"
@@ -303,6 +305,7 @@ class VertexBridge(_PluginBase):
                 raise HTTPException(status_code=429, detail="识别处理中，请稍后重试")
         try:
             result = _recognize_native(payload)
+            result.bridge_version = self.plugin_version
             if result.media_info is None and not self._tmdb_available():
                 raise HTTPException(status_code=503, detail="TMDB 暂不可用，请稍后重试")
             return result

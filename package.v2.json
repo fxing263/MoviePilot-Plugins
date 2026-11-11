@@ -124,12 +124,13 @@
   "VertexBridge": {
     "name": "Vertex 桥接",
     "description": "提供 MP 原生媒体识别、VT 通知转发与 /vt 指令桥接。",
-    "version": "1.3.0",
+    "version": "1.3.1",
     "icon": "mdi-transit-connection-variant",
     "author": "zhaojg",
     "level": 1,
     "v2": true,
     "history": {
+      "v1.3.1": "识别结果附带插件版本；插件升级后 Vertex 会把之前未匹配的条目自动重新识别一次，无需手动补全。",
       "v1.3.0": "英文／拼音名未匹配时，用副标题中的中文名再走一次 MP 原生识别（如天空的「英文名[中文名 | …]」）。",
       "v1.2.1": "原生识别为空时探测 TMDB，故障返回 503 供 Vertex 重试；探测缓存 60 秒。",
       "v1.2.0": "识别协议 v2：按 MP 分隔设置返回独立占位符列表，保留副标题全集数量。",
